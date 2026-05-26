@@ -1,4 +1,9 @@
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+
 from map import Node, Edge, LineMap
+from Algo.Astar import astar
 
 class Robot:
     def __init__(self, currX, currY, map_obj=None, direction=(0, 1)):
@@ -18,6 +23,17 @@ class Robot:
         self.direction = direction
         self.discovered_nodes = set()
         self.discovered_edges = set()
+
+        # known_map: robot's belief-state map — starts obstacle-free, updated as obstacles are discovered.
+        # Used by A* for path planning (vs. self.map which is the ground truth).
+        if map_obj is not None and map_obj.nodes:
+            max_x = max(x for (x, y) in map_obj.nodes) + 1
+            max_y = max(y for (x, y) in map_obj.nodes) + 1
+            self.known_map = LineMap()
+            self.known_map.createMap((max_x, max_y))
+        else:
+            self.known_map = None
+
         self.check_vision()
 
     def check_vision(self):
@@ -34,6 +50,8 @@ class Robot:
         if edge and edge.isBlock == 1:
             edge_key = tuple(sorted([curr_coord, front_coord]))
             self.discovered_edges.add(edge_key)
+            if self.known_map:
+                self.known_map.set_obstacles(edge=(curr_coord, front_coord))
 
     def _get_direction_name(self):
         """
@@ -120,6 +138,8 @@ class Robot:
             # Learn that the edge is blocked
             edge_key = tuple(sorted([current_coord, target_coord]))
             self.discovered_edges.add(edge_key)
+            if self.known_map:
+                self.known_map.set_obstacles(edge=(current_coord, target_coord))
 
             if is_aligned_with_heading:
                 print(f"Edge obstacle detected: The edge {current_coord} -> {target_coord} is blocked in the robot's heading direction. Action: Stayed at {current_coord}.")
@@ -139,7 +159,9 @@ class Robot:
             
             # Learn that the node is blocked
             self.discovered_nodes.add(target_coord)
-            
+            if self.known_map:
+                self.known_map.set_obstacles(node=target_coord)
+
             print(f"Moved onto edge towards {target_coord}, detected that target Node {target_coord} is blocked. Action: Returned to original node {current_coord}.")
             return False
 
@@ -214,5 +236,43 @@ class Robot:
             return self.forward(1)
 
         return False
+
+    def navigate_to(self, target_coord):
+        """
+        Navigates the robot to target_coord using A* on the known map.
+        Re-plans whenever a new obstacle is discovered mid-path.
+
+        Args:
+            target_coord (tuple): Destination (x, y) coordinate.
+
+        Returns:
+            bool: True if the robot reaches the target, False if it becomes unreachable.
+        """
+        if not self.map or not self.known_map:
+            print("Error: No map is set for the robot.")
+            return False
+
+        if target_coord not in self.map.nodes:
+            print(f"Error: Target {target_coord} is not in the map.")
+            return False
+
+        while (self.x, self.y) != target_coord:
+            path = astar(self.known_map, (self.x, self.y), target_coord)
+            if path is None:
+                print(f"No path to {target_coord} with current knowledge. Navigation aborted.")
+                return False
+
+            # Follow the planned path step by step; re-plan if a new obstacle is hit
+            obstacle_hit = False
+            for next_coord in path[1:]:
+                if not self._moveTo(next_coord):
+                    obstacle_hit = True
+                    break
+
+            if not obstacle_hit:
+                break  # Path completed successfully
+            # else: known_map was updated during _moveTo, loop re-plans
+
+        return (self.x, self.y) == target_coord
 
 
