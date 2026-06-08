@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import filedialog
 
 class RobotApp:
     def __init__(self, root, service):
@@ -6,13 +7,15 @@ class RobotApp:
         self.service = service
         
         self.root.title("LineMap Robot Simulator")
-        self.root.geometry("900x980")
+        self.root.geometry("940x1100")
         self.root.configure(bg="#1a1a1a")
         
         self.log_message = "Simulator started. Use A W S D to control."
+        self.log_lines = [self.log_message]
         self.active_path = None
         self.active_path_color = "#29b6f6"
         self.is_auto_running = False
+        self.is_training_running = False
         self.edit_mode = None
         self.pending_edge_start = None
         
@@ -220,6 +223,112 @@ class RobotApp:
         )
         self.edge_button.pack(side=tk.LEFT, padx=5)
 
+        map_io_frame = tk.Frame(self.root, bg="#1a1a1a")
+        map_io_frame.pack(fill=tk.X, padx=40, pady=5)
+
+        self.save_map_button = tk.Button(
+            map_io_frame,
+            text="Save Map JSON",
+            command=self.save_map_dialog,
+            bg="#263238",
+            fg="#ffffff",
+            activebackground="#37474f",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6
+        )
+        self.save_map_button.pack(side=tk.LEFT, padx=5)
+
+        self.load_map_button = tk.Button(
+            map_io_frame,
+            text="Load Map JSON",
+            command=self.load_map_dialog,
+            bg="#263238",
+            fg="#ffffff",
+            activebackground="#37474f",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6
+        )
+        self.load_map_button.pack(side=tk.LEFT, padx=5)
+
+        training_frame = tk.Frame(self.root, bg="#1a1a1a")
+        training_frame.pack(fill=tk.X, padx=40, pady=5)
+
+        self.training_map_var = tk.IntVar(value=1)
+        training_count = max(1, len(self.service.get_training_map_files()))
+        self.training_map_spinbox = tk.Spinbox(
+            training_frame,
+            from_=1,
+            to=training_count,
+            width=4,
+            textvariable=self.training_map_var,
+            bg="#263238",
+            fg="#ffffff",
+            buttonbackground="#37474f",
+            relief=tk.FLAT
+        )
+        self.training_map_spinbox.pack(side=tk.LEFT, padx=5)
+
+        self.load_training_button = tk.Button(
+            training_frame,
+            text="Load Training Map",
+            command=self.load_training_map,
+            bg="#1e3a5f",
+            fg="#ffffff",
+            activebackground="#244d7a",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6
+        )
+        self.load_training_button.pack(side=tk.LEFT, padx=5)
+
+        self.training_episodes_var = tk.IntVar(value=500)
+        self.training_episodes_spinbox = tk.Spinbox(
+            training_frame,
+            from_=50,
+            to=10000,
+            increment=50,
+            width=6,
+            textvariable=self.training_episodes_var,
+            bg="#263238",
+            fg="#ffffff",
+            buttonbackground="#37474f",
+            relief=tk.FLAT
+        )
+        self.training_episodes_spinbox.pack(side=tk.LEFT, padx=5)
+
+        self.train_rl_button = tk.Button(
+            training_frame,
+            text="Train Student RL",
+            command=self.run_student_rl_training,
+            bg="#6a1b9a",
+            fg="#ffffff",
+            activebackground="#8e24aa",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6
+        )
+        self.train_rl_button.pack(side=tk.LEFT, padx=5)
+
+        self.stop_rl_button = tk.Button(
+            training_frame,
+            text="Stop RL",
+            command=self.stop_student_rl_training,
+            bg="#4e342e",
+            fg="#ffffff",
+            activebackground="#6d4c41",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6
+        )
+        self.stop_rl_button.pack(side=tk.LEFT, padx=5)
+
         # Console Log Box
         log_frame = tk.Frame(self.root, bg="#1a1a1a")
         log_frame.pack(fill=tk.X, padx=40, pady=5)
@@ -250,8 +359,90 @@ class RobotApp:
         )
         guide.pack()
 
+    def save_map_dialog(self):
+        self.is_auto_running = False
+        self.is_training_running = False
+        file_path = filedialog.asksaveasfilename(
+            initialdir=self.service.get_custom_map_dir(),
+            defaultextension=".json",
+            filetypes=[("JSON maps", "*.json"), ("All files", "*.*")],
+            title="Save current map",
+        )
+        if not file_path:
+            return
+        try:
+            self.log_message = self.service.save_map(file_path)
+        except Exception as exc:
+            self.log_message = f"Save failed: {exc}"
+        self.update_status()
+        self.draw_map()
+
+    def load_map_dialog(self):
+        self.is_auto_running = False
+        self.is_training_running = False
+        file_path = filedialog.askopenfilename(
+            initialdir=self.service.get_custom_map_dir(),
+            filetypes=[("JSON maps", "*.json"), ("All files", "*.*")],
+            title="Load map",
+        )
+        if not file_path:
+            return
+        try:
+            self.log_message = self.service.load_map(file_path)
+            self.active_path = None
+            self.pending_edge_start = None
+        except Exception as exc:
+            self.log_message = f"Load failed: {exc}"
+        self.update_status()
+        self.draw_map()
+
+    def load_training_map(self):
+        self.is_auto_running = False
+        self.is_training_running = False
+        file_path, message = self.service.load_training_map(self.training_map_var.get())
+        self.active_path = None
+        self.pending_edge_start = None
+        self.log_message = message
+        self.update_status()
+        self.draw_map()
+
+    def run_student_rl_training(self):
+        if self.is_training_running:
+            return
+        self.is_auto_running = False
+        self.pending_edge_start = None
+        self.active_path = None
+        self.active_path_color = "#ffca28"
+        self.is_training_running = True
+        episodes = self.training_episodes_var.get()
+        self.log_message = self.service.start_student_rl_training(episodes=episodes, batch_size=25)
+        self.update_status()
+        self.draw_map()
+        self.root.after(100, self.animate_student_rl_training)
+
+    def animate_student_rl_training(self):
+        if not self.is_training_running:
+            return
+        done, message, path = self.service.train_student_rl_batch()
+        self.active_path = path
+        self.active_path_color = "#ffca28"
+        self.log_message = message
+        self.update_status()
+        self.draw_map()
+        if done:
+            self.is_training_running = False
+        else:
+            self.root.after(120, self.animate_student_rl_training)
+
+    def stop_student_rl_training(self):
+        self.is_training_running = False
+        self.log_message = self.service.stop_student_rl_training()
+        self.update_status()
+        self.draw_map()
+
     def handle_action(self, key):
         self.is_auto_running = False
+        self.is_training_running = False
         self.active_path = None
         self.pending_edge_start = None
 
@@ -284,13 +475,17 @@ class RobotApp:
         self.draw_map()
 
     def update_status(self):
+        if not self.log_lines or self.log_lines[-1] != self.log_message:
+            self.log_lines.append(self.log_message)
+        self.log_lines = self.log_lines[-5:]
         self.pos_label.config(text=f"Position: ({self.service.get_robot_x()}, {self.service.get_robot_y()})")
         self.dir_label.config(text=f"Heading: {self.service.get_robot_direction_name().upper()}")
         self.score_label.config(text=f"Score: {self.service.get_score()}")
-        self.log_label.config(text=self.log_message)
+        self.log_label.config(text="\n".join(self.log_lines))
 
     def set_edit_mode(self, mode):
         self.is_auto_running = False
+        self.is_training_running = False
         self.active_path = None
         self.pending_edge_start = None
         self.edit_mode = mode
@@ -306,15 +501,18 @@ class RobotApp:
 
     def get_coord_from_canvas(self, event):
         padding = 60
-        map_size = self.service.get_map_size()
-        step = (self.canvas_size - 2 * padding) / (map_size - 1)
-        x = round((event.x - padding) / step)
-        y = round((self.canvas_size - event.y - padding) / step)
+        map_width = self.service.get_map_width()
+        map_height = self.service.get_map_height()
+        step_x = (self.canvas_size - 2 * padding) / max(1, map_width - 1)
+        step_y = (self.canvas_size - 2 * padding) / max(1, map_height - 1)
+        x = round((event.x - padding) / step_x)
+        y = round((self.canvas_size - event.y - padding) / step_y)
         coord = (x, y)
         if coord not in self.service.get_nodes():
             return None
         cx, cy = self.get_canvas_coords(x, y)
-        if abs(event.x - cx) > step * 0.35 or abs(event.y - cy) > step * 0.35:
+        threshold = min(step_x, step_y) * 0.35
+        if abs(event.x - cx) > threshold or abs(event.y - cy) > threshold:
             return None
         return coord
 
@@ -366,6 +564,7 @@ class RobotApp:
 
     def show_astar_path(self):
         self.is_auto_running = False
+        self.is_training_running = False
         self.active_path = self.service.get_astar_path(use_known_map=False)
         self.active_path_color = "#29b6f6"
         if self.active_path:
@@ -377,6 +576,7 @@ class RobotApp:
 
     def show_qlearning_path(self):
         self.is_auto_running = False
+        self.is_training_running = False
         self.pending_edge_start = None
         self.active_path = self.service.get_qlearning_path(from_robot=False)
         self.active_path_color = "#ab47bc"
@@ -390,6 +590,7 @@ class RobotApp:
     def run_two_map_astar(self):
         if self.is_auto_running:
             return
+        self.is_training_running = False
         self.service.reset_robot()
         self.pending_edge_start = None
         self.active_path = None
@@ -422,6 +623,7 @@ class RobotApp:
     def run_two_map_qlearning(self):
         if self.is_auto_running:
             return
+        self.is_training_running = False
         self.service.reset_robot()
         self.pending_edge_start = None
         self.active_path = None
@@ -453,6 +655,7 @@ class RobotApp:
 
     def reset_robot(self):
         self.is_auto_running = False
+        self.is_training_running = False
         self.service.reset_robot()
         self.active_path = None
         self.pending_edge_start = None
@@ -463,10 +666,12 @@ class RobotApp:
     def get_canvas_coords(self, x, y):
         # Map coordinate space to canvas pixel space (flipping Y axis)
         padding = 60
-        map_size = self.service.get_map_size()
-        step = (self.canvas_size - 2 * padding) / (map_size - 1)
-        cx = padding + x * step
-        cy = self.canvas_size - (padding + y * step)
+        map_width = self.service.get_map_width()
+        map_height = self.service.get_map_height()
+        step_x = (self.canvas_size - 2 * padding) / max(1, map_width - 1)
+        step_y = (self.canvas_size - 2 * padding) / max(1, map_height - 1)
+        cx = padding + x * step_x
+        cy = self.canvas_size - (padding + y * step_y)
         return cx, cy
 
     def draw_map(self):

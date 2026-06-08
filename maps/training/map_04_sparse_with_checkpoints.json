@@ -1,0 +1,61 @@
+{
+  "blocked_edges": [
+    [
+      [
+        0,
+        2
+      ],
+      [
+        1,
+        2
+      ]
+    ],
+    [
+      [
+        4,
+        3
+      ],
+      [
+        5,
+        3
+      ]
+    ]
+  ],
+  "blocked_nodes": [
+    [
+      2,
+      2
+    ],
+    [
+      3,
+      3
+    ]
+  ],
+  "checkpoints": [
+    [
+      1,
+      4
+    ],
+    [
+      4,
+      1
+    ]
+  ],
+  "goal": [
+    5,
+    5
+  ],
+  "height": 6,
+  "metadata": {
+    "difficulty": "starter",
+    "lesson": "Students can edit reward, sensor handling, and map data.",
+    "training_order": 4
+  },
+  "name": "Sparse With Checkpoints",
+  "start": [
+    0,
+    0
+  ],
+  "version": 1,
+  "width": 6
+}

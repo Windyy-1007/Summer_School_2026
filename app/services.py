@@ -14,29 +14,45 @@ from map import LineMap
 from agent import Robot
 from Algo.Astar import astar_route
 from Algo.QLearning import get_path as qlearning_path
+from Algo import StudentRL
+from rl_library import (
+    CHECKPOINT_SCR,
+    GOAL_SCR,
+    MOVE_SCR,
+    TURN_SCR,
+    calculate_score,
+    load_map_json,
+    manhattan,
+    save_map_json,
+)
 
-FINAL_GOAL_REWARD = 400
-SUB_GOAL_REWARD = 150
-MOVE_COST = -3
-TURN_COST = -1
+FINAL_GOAL_REWARD = GOAL_SCR
+SUB_GOAL_REWARD = CHECKPOINT_SCR
+MOVE_COST = MOVE_SCR
+TURN_COST = TURN_SCR
 
 class SimulationService:
     def __init__(self, map_size=5):
+        self.map_width = map_size
+        self.map_height = map_size
         self.map_size = map_size
+        self.map_name = "Default Demo Map"
+        self.custom_map_dir = os.path.join(root_dir, "maps", "custom")
+        self.training_map_dir = os.path.join(root_dir, "maps", "training")
         self.start = (0, 0)
         self.goal = (min(4, map_size - 1), min(4, map_size - 1))
         self.sub_goals = [(1, 4), (4, 1)]
-        self.reached_sub_goals = set()
-        self.final_goal_reached = False
-        self.score = 0
         self.map = LineMap()
         self.map.createMap(self.map_size)
+        self.student_rl_training = None
+        self.student_rl_qtable = None
+        self.student_rl_best_result = None
         
         # Gọi phương thức thiết lập vật cản
         self.configure_obstacles()
 
         # Starts at (0,0) facing UP (0, 1)
-        self.robot = Robot(self.start[0], self.start[1], map_obj=self.map, direction=(0, 1))
+        self.reset_robot()
 
     def configure_obstacles(self):
         """
@@ -62,6 +78,71 @@ class SimulationService:
     def get_map_size(self):
         return self.map_size
 
+    def get_map_width(self):
+        return self.map_width
+
+    def get_map_height(self):
+        return self.map_height
+
+    def get_map_name(self):
+        return self.map_name
+
+    def get_custom_map_dir(self):
+        os.makedirs(self.custom_map_dir, exist_ok=True)
+        return self.custom_map_dir
+
+    def get_training_map_files(self):
+        if not os.path.isdir(self.training_map_dir):
+            return []
+        return sorted(
+            os.path.join(self.training_map_dir, filename)
+            for filename in os.listdir(self.training_map_dir)
+            if filename.lower().endswith(".json")
+        )
+
+    def clear_student_rl_training(self):
+        self.student_rl_training = None
+        self.student_rl_qtable = None
+        self.student_rl_best_result = None
+
+    def save_map(self, file_path):
+        data = save_map_json(
+            file_path=file_path,
+            map_obj=self.map,
+            start=self.start,
+            goal=self.goal,
+            checkpoints=self.sub_goals,
+            name=self.map_name,
+            metadata={"source": "LineMap Robot Simulator"},
+        )
+        return f"Saved map '{data['name']}' to {file_path}."
+
+    def load_map(self, file_path):
+        map_data = load_map_json(file_path)
+        self.map = map_data.line_map
+        self.map_width = map_data.width
+        self.map_height = map_data.height
+        self.map_size = max(self.map_width, self.map_height)
+        self.map_name = map_data.name
+        self.start = map_data.start
+        self.goal = map_data.goal
+        self.sub_goals = list(map_data.checkpoints)
+        self.active_training_path = None
+        self.clear_student_rl_training()
+        self.reset_robot()
+        return (
+            f"Loaded map '{self.map_name}' ({self.map_width}x{self.map_height}) "
+            f"with {len(self.sub_goals)} checkpoints."
+        )
+
+    def load_training_map(self, training_index):
+        training_maps = self.get_training_map_files()
+        if not training_maps:
+            return None, "No training maps found."
+        index = max(1, min(int(training_index), len(training_maps))) - 1
+        message = self.load_map(training_maps[index])
+        return training_maps[index], message
+
     def get_start(self):
         return self.start
 
@@ -82,9 +163,24 @@ class SimulationService:
 
     def reset_robot(self):
         self.robot = Robot(self.start[0], self.start[1], map_obj=self.map, direction=(0, 1))
+        self.reset_score_state()
+
+    def reset_score_state(self):
         self.reached_sub_goals = set()
         self.final_goal_reached = False
-        self.score = 0
+        self.num_moves = 0
+        self.num_turns = 0
+        self.min_manhattan_distance = manhattan(self.start, self.goal)
+        self.score = self.current_score()
+
+    def current_score(self):
+        return calculate_score(
+            self.num_moves,
+            self.num_turns,
+            len(self.reached_sub_goals),
+            self.final_goal_reached,
+            self.min_manhattan_distance,
+        )
 
     def get_astar_path(self, use_known_map=False):
         map_obj = self.robot.known_map if use_known_map else self.map
@@ -102,6 +198,84 @@ class SimulationService:
         sub_goals = self.get_remaining_sub_goals() if from_robot else self.sub_goals
         return qlearning_path(map_obj, start, self.goal, sub_goals=sub_goals, episodes=episodes)
 
+    def start_student_rl_training(self, episodes=500, batch_size=25, seed=42):
+        self.student_rl_qtable = StudentRL.create_qtable()
+        self.student_rl_best_result = None
+        self.student_rl_training = {
+            "episode": 0,
+            "episodes": max(1, int(episodes)),
+            "batch_size": max(1, int(batch_size)),
+            "epsilon": 1.0,
+            "epsilon_end": 0.05,
+            "epsilon_decay": 0.995,
+            "alpha": 0.2,
+            "gamma": 0.9,
+            "rng": random.Random(seed),
+            "last_result": None,
+        }
+        return f"Student RL training started for {episodes} episodes on '{self.map_name}'."
+
+    def train_student_rl_batch(self):
+        if self.student_rl_training is None or self.student_rl_qtable is None:
+            self.start_student_rl_training()
+
+        training = self.student_rl_training
+        last_result = training["last_result"]
+
+        for _ in range(training["batch_size"]):
+            if training["episode"] >= training["episodes"]:
+                break
+
+            training["episode"] += 1
+            last_result = StudentRL.run_episode(
+                qtable=self.student_rl_qtable,
+                map_obj=self.map,
+                start=self.start,
+                goal=self.goal,
+                checkpoints=self.sub_goals,
+                episode=training["episode"],
+                epsilon=training["epsilon"],
+                alpha=training["alpha"],
+                gamma=training["gamma"],
+                rng=training["rng"],
+                learning=True,
+            )
+            training["last_result"] = last_result
+            if StudentRL.is_better_result(last_result, self.student_rl_best_result):
+                self.student_rl_best_result = last_result
+            training["epsilon"] = max(
+                training["epsilon_end"],
+                training["epsilon"] * training["epsilon_decay"],
+            )
+
+        policy_result = StudentRL.simulate_policy(
+            self.student_rl_qtable,
+            self.map,
+            self.start,
+            self.goal,
+            self.sub_goals,
+        )
+        done = training["episode"] >= training["episodes"]
+        message = StudentRL.format_episode_log(last_result or policy_result, len(self.sub_goals))
+        if done:
+            message += " Training complete. Showing greedy policy."
+        return done, message, policy_result.path
+
+    def get_student_rl_policy_path(self):
+        if not self.student_rl_qtable:
+            return None
+        return StudentRL.get_policy_path(
+            self.student_rl_qtable,
+            self.map,
+            self.start,
+            self.goal,
+            self.sub_goals,
+        )
+
+    def stop_student_rl_training(self):
+        self.student_rl_training = None
+        return "Student RL training stopped."
+
     def get_remaining_sub_goals(self):
         return [coord for coord in self.sub_goals if coord not in self.reached_sub_goals]
 
@@ -114,6 +288,7 @@ class SimulationService:
         self.map.nodes[coord].isBlock = False
         self.goal = coord
         self.sub_goals = [sub_goal for sub_goal in self.sub_goals if sub_goal != coord]
+        self.clear_student_rl_training()
         self.reset_robot()
         return True
 
@@ -123,9 +298,11 @@ class SimulationService:
         self.map.nodes[coord].isBlock = False
         if coord in self.sub_goals:
             self.sub_goals.remove(coord)
+            self.clear_student_rl_training()
             self.reset_robot()
             return False
         self.sub_goals.append(coord)
+        self.clear_student_rl_training()
         self.reset_robot()
         return True
 
@@ -134,6 +311,7 @@ class SimulationService:
             return None
         node = self.map.nodes[coord]
         node.isBlock = not bool(node.isBlock)
+        self.clear_student_rl_training()
         self.reset_robot()
         return bool(node.isBlock)
 
@@ -157,31 +335,46 @@ class SimulationService:
         for edge in matching_edges:
             edge.isBlock = new_state
 
+        self.clear_student_rl_training()
         self.reset_robot()
         return new_state
 
     def apply_position_rewards(self):
         coord = (self.robot.x, self.robot.y)
+        messages = []
         if coord in self.sub_goals and coord not in self.reached_sub_goals:
             self.reached_sub_goals.add(coord)
-            self.score += SUB_GOAL_REWARD
-            return f" Reached sub-goal {coord}: +{SUB_GOAL_REWARD}."
+            messages.append(f"Checkpoint {coord} recorded (+{SUB_GOAL_REWARD} if goal is reached).")
         if coord == self.goal and not self.final_goal_reached:
             self.final_goal_reached = True
-            self.score += FINAL_GOAL_REWARD
-            return f" Reached final goal: +{FINAL_GOAL_REWARD}."
-        return ""
+            messages.append(f"Reached final goal (+{FINAL_GOAL_REWARD}); score finalized.")
+        if not messages:
+            return ""
+        return " " + " ".join(messages)
 
     def apply_action_score(self, before_coord, before_direction):
-        message = ""
+        if self.final_goal_reached:
+            return " Score is locked after reaching the final goal."
+
+        messages = []
         if before_direction != self.robot.direction:
-            self.score += TURN_COST
-            message += f" Turn {TURN_COST}."
+            self.num_turns += 1
+            messages.append(f"Turn {TURN_COST}.")
         if before_coord != (self.robot.x, self.robot.y):
-            self.score += MOVE_COST
-            message += f" Move {MOVE_COST}."
-            message += self.apply_position_rewards()
-        return message
+            self.num_moves += 1
+            current_coord = (self.robot.x, self.robot.y)
+            self.min_manhattan_distance = min(
+                self.min_manhattan_distance,
+                manhattan(current_coord, self.goal),
+            )
+            messages.append(f"Move {MOVE_COST}.")
+            position_message = self.apply_position_rewards()
+            if position_message:
+                messages.append(position_message.strip())
+        self.score = self.current_score()
+        if not messages:
+            return f" Score={self.score}."
+        return f" {' '.join(messages)} Score={self.score}."
 
     def step_toward_goal_with_known_astar(self):
         if self.final_goal_reached:

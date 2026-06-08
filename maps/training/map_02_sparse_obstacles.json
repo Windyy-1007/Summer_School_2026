@@ -1,0 +1,48 @@
+{
+  "blocked_edges": [
+    [
+      [
+        1,
+        1
+      ],
+      [
+        1,
+        2
+      ]
+    ],
+    [
+      [
+        3,
+        3
+      ],
+      [
+        3,
+        4
+      ]
+    ]
+  ],
+  "blocked_nodes": [
+    [
+      2,
+      2
+    ]
+  ],
+  "checkpoints": [],
+  "goal": [
+    4,
+    4
+  ],
+  "height": 5,
+  "metadata": {
+    "difficulty": "starter",
+    "lesson": "Students can edit reward, sensor handling, and map data.",
+    "training_order": 2
+  },
+  "name": "Sparse Obstacles",
+  "start": [
+    0,
+    0
+  ],
+  "version": 1,
+  "width": 5
+}

@@ -1,0 +1,83 @@
+{
+  "blocked_edges": [
+    [
+      [
+        0,
+        3
+      ],
+      [
+        1,
+        3
+      ]
+    ],
+    [
+      [
+        3,
+        1
+      ],
+      [
+        3,
+        2
+      ]
+    ],
+    [
+      [
+        4,
+        5
+      ],
+      [
+        5,
+        5
+      ]
+    ]
+  ],
+  "blocked_nodes": [
+    [
+      2,
+      1
+    ],
+    [
+      2,
+      2
+    ],
+    [
+      4,
+      4
+    ],
+    [
+      5,
+      4
+    ]
+  ],
+  "checkpoints": [
+    [
+      1,
+      5
+    ],
+    [
+      5,
+      1
+    ],
+    [
+      3,
+      3
+    ]
+  ],
+  "goal": [
+    6,
+    6
+  ],
+  "height": 7,
+  "metadata": {
+    "difficulty": "intro_complex",
+    "lesson": "Students can edit reward, sensor handling, and map data.",
+    "training_order": 5
+  },
+  "name": "Intro Complex",
+  "start": [
+    0,
+    0
+  ],
+  "version": 1,
+  "width": 7
+}
