@@ -8,7 +8,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from map import LineMap
 from agent import Robot
-from Algo.Astar import astar
+from Algo.Astar import astar, astar_route
 from Algo.QLearning import get_path as ql_get_path
 
 
@@ -111,6 +111,16 @@ class TestAstar(unittest.TestCase):
         """A* returns None for a goal coordinate outside the map."""
         self.assertIsNone(astar(self.lm, (0, 0), (9, 9)))
 
+    def test_route_visits_sub_goals_before_final_goal(self):
+        """A* route visits ordered sub-goals before the final goal."""
+        path = astar_route(self.lm, (0, 0), (4, 4), sub_goals=[(0, 4), (4, 0)])
+        self.assertIsNotNone(path)
+        self.assertEqual(path[0], (0, 0))
+        self.assertEqual(path[-1], (4, 4))
+        self.assertLess(path.index((0, 4)), path.index((4, 0)))
+        self.assertLess(path.index((4, 0)), path.index((4, 4)))
+        self.assertTrue(is_valid_path(self.lm, path))
+
 
 # ---------------------------------------------------------------------------
 # Q-Learning tests
@@ -180,6 +190,22 @@ class TestQLearning(unittest.TestCase):
     def test_invalid_goal_returns_none(self):
         """Q-learning returns None for a goal coordinate outside the map."""
         self.assertIsNone(ql_get_path(self.lm, (0, 0), (9, 9)))
+
+    def test_path_visits_sub_goals_before_final_goal(self):
+        """Q-learning path visits ordered sub-goals before the final goal."""
+        path = ql_get_path(
+            self.lm,
+            (0, 0),
+            (4, 4),
+            sub_goals=[(0, 4), (4, 0)],
+            episodes=3000
+        )
+        self.assertIsNotNone(path)
+        self.assertEqual(path[0], (0, 0))
+        self.assertEqual(path[-1], (4, 4))
+        self.assertLess(path.index((0, 4)), path.index((4, 0)))
+        self.assertLess(path.index((4, 0)), path.index((4, 4)))
+        self.assertTrue(is_valid_path(self.lm, path))
 
 
 # ---------------------------------------------------------------------------

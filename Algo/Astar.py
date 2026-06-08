@@ -70,3 +70,24 @@ def astar(map_obj, start, goal):
                 heapq.heappush(open_set, (f, tentative_g, neighbor))
 
     return None  # No path found
+
+
+def astar_route(map_obj, start, goal, sub_goals=None):
+    """
+    Builds one route from start through each sub-goal, then to the final goal.
+
+    Returns:
+        list: Combined coordinate path, or None if any segment is unreachable.
+    """
+    targets = list(sub_goals or []) + [goal]
+    route = [start]
+    current = start
+
+    for target in targets:
+        segment = astar(map_obj, current, target)
+        if segment is None:
+            return None
+        route.extend(segment[1:])
+        current = target
+
+    return route

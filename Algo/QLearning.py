@@ -5,8 +5,9 @@ from collections import defaultdict
 ACTIONS = [(0, 1), (1, 0), (0, -1), (-1, 0)]  # up, right, down, left
 
 # Reward values
-REWARD_GOAL = 100
-REWARD_STEP = -1
+REWARD_GOAL = 400
+REWARD_SUB_GOAL = 150
+REWARD_STEP = -3
 REWARD_OBSTACLE = -10
 
 
@@ -94,6 +95,7 @@ def train(map_obj, start, goal,
 
 
 def get_path(map_obj, start, goal,
+             sub_goals=None,
              episodes=2000, alpha=0.1, gamma=0.9,
              epsilon_start=1.0, epsilon_end=0.05, epsilon_decay=0.995):
     """
@@ -115,6 +117,27 @@ def get_path(map_obj, start, goal,
         list: Ordered list of (x, y) coordinates from start to goal (inclusive),
               or None if the goal could not be reached.
     """
+    if sub_goals:
+        route = [start]
+        current = start
+        for target in list(sub_goals) + [goal]:
+            segment = get_path(
+                map_obj,
+                current,
+                target,
+                episodes=episodes,
+                alpha=alpha,
+                gamma=gamma,
+                epsilon_start=epsilon_start,
+                epsilon_end=epsilon_end,
+                epsilon_decay=epsilon_decay
+            )
+            if segment is None:
+                return None
+            route.extend(segment[1:])
+            current = target
+        return route
+
     if start not in map_obj.nodes or goal not in map_obj.nodes:
         return None
     if map_obj.nodes[goal].isBlock:
