@@ -2,12 +2,17 @@ import tkinter as tk
 from tkinter import filedialog
 
 class RobotApp:
+    MAX_CANVAS_SIZE = 750
+    MIN_CANVAS_SIZE = 240
+    WINDOW_MARGIN = 80
+    CONTROL_HEIGHT_ESTIMATE = 350
+
     def __init__(self, root, service):
         self.root = root
         self.service = service
         
         self.root.title("LineMap Robot Simulator")
-        self.root.geometry("940x1100")
+        self._configure_window_size()
         self.root.configure(bg="#1a1a1a")
         
         self.log_message = "Simulator started. Use A W S D to control."
@@ -18,9 +23,11 @@ class RobotApp:
         self.is_training_running = False
         self.edit_mode = None
         self.pending_edge_start = None
+        self._resize_after_id = None
         
         # Build GUI
         self.setup_ui()
+        self.root.bind("<Configure>", self.schedule_resize)
         
         # Bind Keyboard Keys
         self.root.bind('<w>', lambda e: self.handle_action('W'))
@@ -33,6 +40,48 @@ class RobotApp:
         self.root.bind('<D>', lambda e: self.handle_action('D'))
         self.canvas.bind("<Button-1>", self.handle_canvas_click)
         
+        self.draw_map()
+
+    def _configure_window_size(self):
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        width = min(940, max(560, screen_width - self.WINDOW_MARGIN))
+        height = min(1100, max(600, screen_height - self.WINDOW_MARGIN))
+        self.root.geometry(f"{width}x{height}")
+        self.root.minsize(520, 560)
+        self.root.resizable(True, True)
+        self.canvas_size = self._canvas_size_for_window(width, height)
+
+    def _canvas_size_for_window(self, width, height):
+        available_width = max(self.MIN_CANVAS_SIZE, width - self.WINDOW_MARGIN)
+        available_height = max(
+            self.MIN_CANVAS_SIZE,
+            height - self.CONTROL_HEIGHT_ESTIMATE,
+        )
+        return int(
+            max(
+                self.MIN_CANVAS_SIZE,
+                min(self.MAX_CANVAS_SIZE, available_width, available_height),
+            )
+        )
+
+    def schedule_resize(self, event):
+        if event.widget is not self.root or not hasattr(self, "canvas"):
+            return
+        if self._resize_after_id is not None:
+            self.root.after_cancel(self._resize_after_id)
+        self._resize_after_id = self.root.after_idle(self.apply_responsive_canvas_size)
+
+    def apply_responsive_canvas_size(self):
+        self._resize_after_id = None
+        new_size = self._canvas_size_for_window(
+            self.root.winfo_width(),
+            self.root.winfo_height(),
+        )
+        if new_size == self.canvas_size:
+            return
+        self.canvas_size = new_size
+        self.canvas.config(width=self.canvas_size, height=self.canvas_size)
         self.draw_map()
 
     def setup_ui(self):
@@ -48,7 +97,6 @@ class RobotApp:
         header.pack()
 
         # Canvas for Drawing Map
-        self.canvas_size = 750
         self.canvas = tk.Canvas(
             self.root, 
             width=self.canvas_size, 
@@ -56,11 +104,11 @@ class RobotApp:
             bg="#262626", 
             highlightthickness=0
         )
-        self.canvas.pack(pady=10)
+        self.canvas.pack(pady=(4, 8))
 
         # Status and Control Frame
         info_frame = tk.Frame(self.root, bg="#1a1a1a", pady=10)
-        info_frame.pack(fill=tk.X, padx=40)
+        info_frame.pack(fill=tk.X, padx=20)
 
         # Position and Direction Labels
         self.pos_label = tk.Label(
@@ -92,7 +140,7 @@ class RobotApp:
 
         # Planner Buttons
         button_frame = tk.Frame(self.root, bg="#1a1a1a")
-        button_frame.pack(fill=tk.X, padx=40, pady=5)
+        button_frame.pack(fill=tk.X, padx=20, pady=5)
 
         self.astar_button = tk.Button(
             button_frame,
@@ -165,7 +213,7 @@ class RobotApp:
         self.reset_button.pack(side=tk.RIGHT, padx=5)
 
         edit_frame = tk.Frame(self.root, bg="#1a1a1a")
-        edit_frame.pack(fill=tk.X, padx=40, pady=5)
+        edit_frame.pack(fill=tk.X, padx=20, pady=5)
 
         self.goal_button = tk.Button(
             edit_frame,
@@ -224,7 +272,7 @@ class RobotApp:
         self.edge_button.pack(side=tk.LEFT, padx=5)
 
         map_io_frame = tk.Frame(self.root, bg="#1a1a1a")
-        map_io_frame.pack(fill=tk.X, padx=40, pady=5)
+        map_io_frame.pack(fill=tk.X, padx=20, pady=5)
 
         self.save_map_button = tk.Button(
             map_io_frame,
@@ -255,7 +303,7 @@ class RobotApp:
         self.load_map_button.pack(side=tk.LEFT, padx=5)
 
         training_frame = tk.Frame(self.root, bg="#1a1a1a")
-        training_frame.pack(fill=tk.X, padx=40, pady=5)
+        training_frame.pack(fill=tk.X, padx=20, pady=5)
 
         self.training_map_var = tk.IntVar(value=1)
         training_count = max(1, len(self.service.get_training_map_files()))
@@ -331,7 +379,7 @@ class RobotApp:
 
         # Console Log Box
         log_frame = tk.Frame(self.root, bg="#1a1a1a")
-        log_frame.pack(fill=tk.X, padx=40, pady=5)
+        log_frame.pack(fill=tk.X, padx=20, pady=5)
         
         self.log_label = tk.Label(
             log_frame, 
@@ -500,7 +548,7 @@ class RobotApp:
         self.draw_map()
 
     def get_coord_from_canvas(self, event):
-        padding = 60
+        padding = self.get_canvas_padding()
         map_width = self.service.get_map_width()
         map_height = self.service.get_map_height()
         step_x = (self.canvas_size - 2 * padding) / max(1, map_width - 1)
@@ -665,7 +713,7 @@ class RobotApp:
 
     def get_canvas_coords(self, x, y):
         # Map coordinate space to canvas pixel space (flipping Y axis)
-        padding = 60
+        padding = self.get_canvas_padding()
         map_width = self.service.get_map_width()
         map_height = self.service.get_map_height()
         step_x = (self.canvas_size - 2 * padding) / max(1, map_width - 1)
@@ -674,25 +722,26 @@ class RobotApp:
         cy = self.canvas_size - (padding + y * step_y)
         return cx, cy
 
+    def get_canvas_padding(self):
+        return max(24, min(60, self.canvas_size * 0.08))
+
     def draw_map(self):
         self.canvas.delete("all")
         map_size = self.service.get_map_size()
+        padding = self.get_canvas_padding()
+        map_width = self.service.get_map_width()
+        map_height = self.service.get_map_height()
+        step_x = (self.canvas_size - 2 * padding) / max(1, map_width - 1)
+        step_y = (self.canvas_size - 2 * padding) / max(1, map_height - 1)
+        spacing = max(1, min(step_x, step_y))
         
-        # Adjust dimensions dynamically based on grid density
-        if map_size > 12:
-            node_radius = 8
-            cross_half_size = 4
-            edge_width = 2
-            robot_tip = 12
-            robot_base = 8
-            font_size = 6
-        else:
-            node_radius = 12
-            cross_half_size = 6
-            edge_width = 3
-            robot_tip = 16
-            robot_base = 12
-            font_size = 8
+        # Adjust dimensions dynamically based on both grid density and canvas size.
+        node_radius = max(4, min(12, spacing * 0.24))
+        cross_half_size = max(2, node_radius * 0.45)
+        edge_width = max(1, int(min(3, spacing / 10)))
+        robot_tip = max(8, node_radius * 1.5)
+        robot_base = max(6, node_radius)
+        font_size = max(5, int(min(8, spacing * 0.25)))
 
         # 1. Draw Edges
         for e in self.service.get_edges():
@@ -805,7 +854,7 @@ class RobotApp:
                     )
                 
             # Add small coordinate text above/below clear nodes for clarity (only if map is not too crowded)
-            if map_size <= 18:
+            if map_size <= 18 and spacing >= 20:
                 offset_y = -(node_radius + 8)
                 self.canvas.create_text(
                     cx, cy + offset_y, 
