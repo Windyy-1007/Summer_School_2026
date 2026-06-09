@@ -339,6 +339,36 @@ def get_policy_path(qtable, map_obj, start, goal, checkpoints=None, max_steps=No
     return result.path
 
 
+def load_policy_json(file_path):
+    import json
+
+    from rl_library import RLState
+
+    with open(file_path, "r", encoding="utf-8") as json_file:
+        data = json.load(json_file)
+
+    if data.get("version") != 1:
+        raise ValueError("Only StudentRL policy JSON version 1 is supported.")
+
+    qtable = create_qtable()
+    for row in data.get("qtable", []):
+        state_data = row["state"]
+        state = RLState(
+            int(state_data["x"]),
+            int(state_data["y"]),
+            int(state_data["dx"]),
+            int(state_data["dy"]),
+            int(state_data.get("checkpoints_mask", 0)),
+        )
+        action_values = row.get("actions", {})
+        qtable[state] = {
+            action: float(action_values.get(action, 0.0))
+            for action in ACTIONS
+        }
+
+    return qtable, data
+
+
 def format_episode_log(result, total_checkpoints=0):
     goal_text = "yes" if result.reached_goal else "no"
     return (

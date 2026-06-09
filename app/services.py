@@ -30,6 +30,7 @@ FINAL_GOAL_REWARD = GOAL_SCR
 SUB_GOAL_REWARD = CHECKPOINT_SCR
 MOVE_COST = MOVE_SCR
 TURN_COST = TURN_SCR
+STUDENT_RL_POLICY_FILENAME = "student_rl_policy.json"
 
 class SimulationService:
     def __init__(self, map_size=5):
@@ -39,6 +40,8 @@ class SimulationService:
         self.map_name = "Default Demo Map"
         self.custom_map_dir = os.path.join(root_dir, "maps", "custom")
         self.training_map_dir = os.path.join(root_dir, "maps", "training")
+        self.student_rl_policy_dir = os.path.join(root_dir, "maps", "student_rl_policies")
+        self.current_map_file_path = None
         self.start = (0, 0)
         self.goal = (min(4, map_size - 1), min(4, map_size - 1))
         self.sub_goals = [(1, 4), (4, 1)]
@@ -47,6 +50,9 @@ class SimulationService:
         self.student_rl_training = None
         self.student_rl_qtable = None
         self.student_rl_best_result = None
+        self.student_rl_run_qtable = None
+        self.student_rl_run_signature = None
+        self.student_rl_run_policy_data = None
         
         # Gọi phương thức thiết lập vật cản
         self.configure_obstacles()
@@ -91,6 +97,10 @@ class SimulationService:
         os.makedirs(self.custom_map_dir, exist_ok=True)
         return self.custom_map_dir
 
+    def get_student_rl_policy_dir(self):
+        os.makedirs(self.student_rl_policy_dir, exist_ok=True)
+        return self.student_rl_policy_dir
+
     def get_training_map_files(self):
         if not os.path.isdir(self.training_map_dir):
             return []
@@ -104,6 +114,9 @@ class SimulationService:
         self.student_rl_training = None
         self.student_rl_qtable = None
         self.student_rl_best_result = None
+        self.student_rl_run_qtable = None
+        self.student_rl_run_signature = None
+        self.student_rl_run_policy_data = None
 
     def save_map(self, file_path):
         data = save_map_json(
@@ -115,6 +128,7 @@ class SimulationService:
             name=self.map_name,
             metadata={"source": "LineMap Robot Simulator"},
         )
+        self.current_map_file_path = file_path
         return f"Saved map '{data['name']}' to {file_path}."
 
     def load_map(self, file_path):
@@ -124,6 +138,7 @@ class SimulationService:
         self.map_height = map_data.height
         self.map_size = max(self.map_width, self.map_height)
         self.map_name = map_data.name
+        self.current_map_file_path = file_path
         self.start = map_data.start
         self.goal = map_data.goal
         self.sub_goals = list(map_data.checkpoints)
@@ -163,6 +178,9 @@ class SimulationService:
 
     def reset_robot(self):
         self.robot = Robot(self.start[0], self.start[1], map_obj=self.map, direction=(0, 1))
+        self.student_rl_run_qtable = None
+        self.student_rl_run_signature = None
+        self.student_rl_run_policy_data = None
         self.reset_score_state()
 
     def reset_score_state(self):
@@ -199,11 +217,12 @@ class SimulationService:
         return qlearning_path(map_obj, start, self.goal, sub_goals=sub_goals, episodes=episodes)
 
     def start_student_rl_training(self, episodes=500, batch_size=25, seed=42):
-        self.student_rl_qtable = StudentRL.create_qtable()
+        self.student_rl_qtable, policy_data = self.load_student_rl_policy()
         self.student_rl_best_result = None
         self.student_rl_training = {
             "episode": 0,
             "episodes": max(1, int(episodes)),
+            "previous_episodes": int((policy_data or {}).get("episodes", 0)),
             "batch_size": max(1, int(batch_size)),
             "epsilon": 1.0,
             "epsilon_end": 0.05,
@@ -213,7 +232,11 @@ class SimulationService:
             "rng": random.Random(seed),
             "last_result": None,
         }
-        return f"Student RL training started for {episodes} episodes on '{self.map_name}'."
+        action = "Updating existing" if policy_data else "Creating"
+        return (
+            f"{action} shared Student RL policy for {episodes} more episodes "
+            f"on '{self.map_name}'."
+        )
 
     def train_student_rl_batch(self):
         if self.student_rl_training is None or self.student_rl_qtable is None:
@@ -258,8 +281,156 @@ class SimulationService:
         done = training["episode"] >= training["episodes"]
         message = StudentRL.format_episode_log(last_result or policy_result, len(self.sub_goals))
         if done:
-            message += " Training complete. Showing greedy policy."
+            policy_file = self.save_student_rl_policy(
+                self.student_rl_qtable,
+                training["previous_episodes"] + training["episodes"],
+                best_result=self.student_rl_best_result,
+                last_result=last_result,
+                policy_result=policy_result,
+                metadata={
+                    "last_training_mode": "current_map",
+                    "last_training_map": self.map_name,
+                    "last_training_episodes": training["episodes"],
+                    "total_recorded_episodes": training["previous_episodes"] + training["episodes"],
+                },
+            )
+            rel_policy_file = os.path.relpath(policy_file, root_dir)
+            message += f" Training complete. Saved policy to {rel_policy_file}."
         return done, message, policy_result.path
+
+    def _policy_file_path(self, map_name=None, map_file=None):
+        return os.path.join(self.get_student_rl_policy_dir(), STUDENT_RL_POLICY_FILENAME)
+
+    def load_student_rl_policy(self):
+        file_path = self._policy_file_path()
+        if not os.path.exists(file_path):
+            return StudentRL.create_qtable(), None
+        qtable, policy_data = StudentRL.load_policy_json(file_path)
+        return qtable, policy_data
+
+    def save_student_rl_policy(
+        self,
+        qtable,
+        episodes,
+        best_result=None,
+        last_result=None,
+        policy_result=None,
+        map_name=None,
+        map_file=None,
+        start=None,
+        goal=None,
+        checkpoints=None,
+        metadata=None,
+    ):
+        file_path = self._policy_file_path()
+        map_file_for_json = os.path.relpath(map_file, root_dir) if map_file else None
+        StudentRL.save_policy_json(
+            file_path=file_path,
+            qtable=qtable,
+            episodes=episodes,
+            map_name="student_rl_shared_policy",
+            map_file=map_file_for_json,
+            start=start,
+            goal=goal,
+            checkpoints=checkpoints or [],
+            best_result=best_result,
+            last_result=last_result,
+            policy_result=policy_result,
+            metadata={
+                "source": "LineMap Robot Simulator",
+                **dict(metadata or {}),
+            },
+        )
+        return file_path
+
+    def train_student_rl_all_training_maps(self, episodes=500, seed=42):
+        map_files = self.get_training_map_files()
+        if not map_files:
+            return "No training maps found."
+
+        shared_qtable, policy_data = self.load_student_rl_policy()
+        previous_episodes = int((policy_data or {}).get("episodes", 0))
+        loaded_maps = []
+
+        for index, file_path in enumerate(map_files, start=1):
+            map_data = load_map_json(file_path)
+            loaded_maps.append((file_path, map_data))
+            StudentRL.train(
+                map_obj=map_data.line_map,
+                start=map_data.start,
+                goal=map_data.goal,
+                checkpoints=map_data.checkpoints,
+                episodes=episodes,
+                log_every=max(1, episodes),
+                seed=seed + index,
+                qtable=shared_qtable,
+            )
+
+        reached = 0
+        failed = []
+        evaluation = []
+
+        for file_path, map_data in loaded_maps:
+            policy_result = StudentRL.simulate_policy(
+                shared_qtable,
+                map_data.line_map,
+                map_data.start,
+                map_data.goal,
+                map_data.checkpoints,
+            )
+            rel_map_file = os.path.relpath(file_path, root_dir)
+            evaluation.append(
+                {
+                    "map_name": map_data.name,
+                    "map_file": rel_map_file,
+                    "reached_goal": policy_result.reached_goal,
+                    "checkpoints_reached": policy_result.checkpoints_reached,
+                    "total_checkpoints": len(map_data.checkpoints),
+                    "score": policy_result.score,
+                    "moves": policy_result.moves,
+                    "turns": policy_result.turns,
+                    "path": [list(coord) for coord in policy_result.path],
+                }
+            )
+            if policy_result.reached_goal:
+                reached += 1
+            else:
+                failed.append(map_data.name)
+
+        policy_file = self.save_student_rl_policy(
+            qtable=shared_qtable,
+            episodes=previous_episodes + episodes * len(loaded_maps),
+            map_file=None,
+            start=None,
+            goal=None,
+            checkpoints=[],
+            metadata={
+                "last_training_mode": "all_training_maps",
+                "episodes_per_map": episodes,
+                "previous_recorded_episodes": previous_episodes,
+                "total_recorded_episodes": previous_episodes + episodes * len(loaded_maps),
+                "training_maps": [
+                    {
+                        "map_name": map_data.name,
+                        "map_file": os.path.relpath(file_path, root_dir),
+                    }
+                    for file_path, map_data in loaded_maps
+                ],
+                "evaluation": evaluation,
+            },
+        )
+        rel_policy_file = os.path.relpath(policy_file, root_dir)
+        message = (
+            f"Trained one shared Student RL model on {len(map_files)} maps "
+            f"({episodes} episodes each). Saved one policy to {rel_policy_file}. "
+            f"Greedy policy reached goal on {reached}/{len(map_files)} maps."
+        )
+        if failed:
+            message += " Failed: " + ", ".join(failed[:3])
+            if len(failed) > 3:
+                message += f", +{len(failed) - 3} more"
+            message += "."
+        return message
 
     def get_student_rl_policy_path(self):
         if not self.student_rl_qtable:
@@ -276,6 +447,16 @@ class SimulationService:
         self.student_rl_training = None
         return "Student RL training stopped."
 
+    def reset_student_rl_policy(self):
+        self.clear_student_rl_training()
+        policy_file = self._policy_file_path()
+        if os.path.exists(policy_file):
+            os.remove(policy_file)
+            rel_policy_file = os.path.relpath(policy_file, root_dir)
+            return f"Reset Student RL training. Deleted {rel_policy_file}."
+        rel_policy_file = os.path.relpath(policy_file, root_dir)
+        return f"Reset Student RL training. No saved policy found at {rel_policy_file}."
+
     def get_remaining_sub_goals(self):
         return [coord for coord in self.sub_goals if coord not in self.reached_sub_goals]
 
@@ -287,6 +468,7 @@ class SimulationService:
             return False
         self.map.nodes[coord].isBlock = False
         self.goal = coord
+        self.current_map_file_path = None
         self.sub_goals = [sub_goal for sub_goal in self.sub_goals if sub_goal != coord]
         self.clear_student_rl_training()
         self.reset_robot()
@@ -296,6 +478,7 @@ class SimulationService:
         if coord not in self.map.nodes or coord in (self.start, self.goal):
             return None
         self.map.nodes[coord].isBlock = False
+        self.current_map_file_path = None
         if coord in self.sub_goals:
             self.sub_goals.remove(coord)
             self.clear_student_rl_training()
@@ -311,6 +494,7 @@ class SimulationService:
             return None
         node = self.map.nodes[coord]
         node.isBlock = not bool(node.isBlock)
+        self.current_map_file_path = None
         self.clear_student_rl_training()
         self.reset_robot()
         return bool(node.isBlock)
@@ -335,6 +519,7 @@ class SimulationService:
         for edge in matching_edges:
             edge.isBlock = new_state
 
+        self.current_map_file_path = None
         self.clear_student_rl_training()
         self.reset_robot()
         return new_state
@@ -417,6 +602,79 @@ class SimulationService:
         if moved:
             return None, f"Q-learning moved to {next_coord}.{score_message}", path
         return None, f"Q-learning discovered obstacle near {next_coord}; replanning.{score_message}", path
+
+    def _student_rl_run_state_signature(self):
+        return (
+            tuple(sorted(self.robot.discovered_nodes)),
+            tuple(sorted(self.robot.discovered_edges)),
+            tuple(self.get_remaining_sub_goals()),
+            self.goal,
+        )
+
+    def _get_known_student_rl_policy(self, episodes=500):
+        if self.robot.known_map is None:
+            return None, None
+
+        signature = self._student_rl_run_state_signature()
+        start = (self.robot.x, self.robot.y)
+        remaining_sub_goals = self.get_remaining_sub_goals()
+
+        if self.student_rl_run_qtable is None or signature != self.student_rl_run_signature:
+            self.student_rl_run_qtable, self.student_rl_run_policy_data = self.load_student_rl_policy()
+            if self.student_rl_run_policy_data is None:
+                self.student_rl_run_qtable = None
+                return None, None
+            self.student_rl_run_signature = signature
+
+        policy = StudentRL.simulate_policy(
+            self.student_rl_run_qtable,
+            self.robot.known_map,
+            start,
+            self.goal,
+            remaining_sub_goals,
+            initial_direction=self.robot.direction,
+        )
+        return policy, self.student_rl_run_policy_data
+
+    def step_toward_goal_with_known_student_rl(self, episodes=500):
+        if self.final_goal_reached:
+            return True, "Reached final goal.", None
+
+        policy, policy_data = self._get_known_student_rl_policy(episodes=episodes)
+        if policy is None:
+            return (
+                False,
+                "No saved Student RL policy found. Click Train Student RL or Train One RL Model first.",
+                None,
+            )
+
+        path = policy.path
+        if not policy.reached_goal or len(path) < 2:
+            episodes_text = policy_data.get("episodes", 0) if policy_data else 0
+            return (
+                False,
+                f"Saved Student RL policy found no complete path on known_map "
+                f"(trained episodes recorded: {episodes_text}).",
+                path,
+            )
+
+        next_coord = path[1]
+        before_coord = (self.robot.x, self.robot.y)
+        before_direction = self.robot.direction
+        moved = self.robot._moveTo(next_coord)
+        score_message = self.apply_action_score(before_coord, before_direction)
+
+        if self.final_goal_reached:
+            return True, f"Saved Student RL policy moved to {next_coord}.{score_message}", path
+        if moved:
+            if self._student_rl_run_state_signature() != self.student_rl_run_signature:
+                self.student_rl_run_qtable = None
+            return None, f"Saved Student RL policy moved to {next_coord}.{score_message}", path
+
+        self.student_rl_run_qtable = None
+        self.student_rl_run_signature = None
+        self.student_rl_run_policy_data = None
+        return None, f"Saved Student RL policy discovered obstacle near {next_coord}; replanning.{score_message}", path
 
     def get_robot_x(self):
         return self.robot.x

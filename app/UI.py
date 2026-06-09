@@ -85,9 +85,41 @@ class RobotApp:
         self.draw_map()
 
     def setup_ui(self):
+        self.scroll_frame = tk.Frame(self.root, bg="#1a1a1a")
+        self.scroll_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.scroll_canvas = tk.Canvas(
+            self.scroll_frame,
+            bg="#1a1a1a",
+            highlightthickness=0,
+            bd=0
+        )
+        self.scrollbar = tk.Scrollbar(
+            self.scroll_frame,
+            orient=tk.VERTICAL,
+            command=self.scroll_canvas.yview
+        )
+        self.content_frame = tk.Frame(self.scroll_canvas, bg="#1a1a1a")
+        self.content_window = self.scroll_canvas.create_window(
+            (0, 0),
+            window=self.content_frame,
+            anchor="nw"
+        )
+
+        self.scroll_canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.content_frame.bind("<Configure>", self.update_scroll_region)
+        self.scroll_canvas.bind("<Configure>", self.resize_scroll_content)
+        self.root.bind_all("<MouseWheel>", self.handle_mousewheel)
+        self.root.bind_all("<Button-4>", self.handle_mousewheel)
+        self.root.bind_all("<Button-5>", self.handle_mousewheel)
+
+        parent = self.content_frame
+
         # Header Label
         header = tk.Label(
-            self.root, 
+            parent,
             text="ROBOT NAVIGATION SIMULATOR", 
             font=("Helvetica", 16, "bold"), 
             bg="#1a1a1a", 
@@ -98,7 +130,7 @@ class RobotApp:
 
         # Canvas for Drawing Map
         self.canvas = tk.Canvas(
-            self.root, 
+            parent,
             width=self.canvas_size, 
             height=self.canvas_size, 
             bg="#262626", 
@@ -107,7 +139,7 @@ class RobotApp:
         self.canvas.pack(pady=(4, 8))
 
         # Status and Control Frame
-        info_frame = tk.Frame(self.root, bg="#1a1a1a", pady=10)
+        info_frame = tk.Frame(parent, bg="#1a1a1a", pady=10)
         info_frame.pack(fill=tk.X, padx=20)
 
         # Position and Direction Labels
@@ -139,8 +171,10 @@ class RobotApp:
         self.score_label.pack(side=tk.LEFT, padx=30)
 
         # Planner Buttons
-        button_frame = tk.Frame(self.root, bg="#1a1a1a")
+        button_frame = tk.Frame(parent, bg="#1a1a1a")
         button_frame.pack(fill=tk.X, padx=20, pady=5)
+        for column in range(3):
+            button_frame.columnconfigure(column, weight=1, uniform="planner")
 
         self.astar_button = tk.Button(
             button_frame,
@@ -154,7 +188,7 @@ class RobotApp:
             padx=12,
             pady=6
         )
-        self.astar_button.pack(side=tk.LEFT, padx=5)
+        self.astar_button.grid(row=0, column=0, sticky="ew", padx=5, pady=3)
 
         self.qlearning_button = tk.Button(
             button_frame,
@@ -168,7 +202,7 @@ class RobotApp:
             padx=12,
             pady=6
         )
-        self.qlearning_button.pack(side=tk.LEFT, padx=5)
+        self.qlearning_button.grid(row=0, column=1, sticky="ew", padx=5, pady=3)
 
         self.two_map_button = tk.Button(
             button_frame,
@@ -182,7 +216,7 @@ class RobotApp:
             padx=12,
             pady=6
         )
-        self.two_map_button.pack(side=tk.LEFT, padx=5)
+        self.two_map_button.grid(row=1, column=0, sticky="ew", padx=5, pady=3)
 
         self.two_map_q_button = tk.Button(
             button_frame,
@@ -196,7 +230,21 @@ class RobotApp:
             padx=12,
             pady=6
         )
-        self.two_map_q_button.pack(side=tk.LEFT, padx=5)
+        self.two_map_q_button.grid(row=1, column=1, sticky="ew", padx=5, pady=3)
+
+        self.student_rl_run_button = tk.Button(
+            button_frame,
+            text="Run Student RL",
+            command=self.run_student_rl_policy,
+            bg="#ad1457",
+            fg="#ffffff",
+            activebackground="#d81b60",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6
+        )
+        self.student_rl_run_button.grid(row=1, column=2, sticky="ew", padx=5, pady=3)
 
         self.reset_button = tk.Button(
             button_frame,
@@ -210,9 +258,9 @@ class RobotApp:
             padx=12,
             pady=6
         )
-        self.reset_button.pack(side=tk.RIGHT, padx=5)
+        self.reset_button.grid(row=0, column=2, sticky="ew", padx=5, pady=3)
 
-        edit_frame = tk.Frame(self.root, bg="#1a1a1a")
+        edit_frame = tk.Frame(parent, bg="#1a1a1a")
         edit_frame.pack(fill=tk.X, padx=20, pady=5)
 
         self.goal_button = tk.Button(
@@ -271,7 +319,7 @@ class RobotApp:
         )
         self.edge_button.pack(side=tk.LEFT, padx=5)
 
-        map_io_frame = tk.Frame(self.root, bg="#1a1a1a")
+        map_io_frame = tk.Frame(parent, bg="#1a1a1a")
         map_io_frame.pack(fill=tk.X, padx=20, pady=5)
 
         self.save_map_button = tk.Button(
@@ -302,7 +350,7 @@ class RobotApp:
         )
         self.load_map_button.pack(side=tk.LEFT, padx=5)
 
-        training_frame = tk.Frame(self.root, bg="#1a1a1a")
+        training_frame = tk.Frame(parent, bg="#1a1a1a")
         training_frame.pack(fill=tk.X, padx=20, pady=5)
 
         self.training_map_var = tk.IntVar(value=1)
@@ -363,6 +411,20 @@ class RobotApp:
         )
         self.train_rl_button.pack(side=tk.LEFT, padx=5)
 
+        self.train_all_rl_button = tk.Button(
+            training_frame,
+            text="Train One RL Model",
+            command=self.train_student_rl_all_maps,
+            bg="#ad1457",
+            fg="#ffffff",
+            activebackground="#d81b60",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6
+        )
+        self.train_all_rl_button.pack(side=tk.LEFT, padx=5)
+
         self.stop_rl_button = tk.Button(
             training_frame,
             text="Stop RL",
@@ -377,8 +439,22 @@ class RobotApp:
         )
         self.stop_rl_button.pack(side=tk.LEFT, padx=5)
 
+        self.reset_rl_policy_button = tk.Button(
+            training_frame,
+            text="Reset RL Model",
+            command=self.reset_student_rl_policy,
+            bg="#7f1d1d",
+            fg="#ffffff",
+            activebackground="#991b1b",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=12,
+            pady=6
+        )
+        self.reset_rl_policy_button.pack(side=tk.LEFT, padx=5)
+
         # Console Log Box
-        log_frame = tk.Frame(self.root, bg="#1a1a1a")
+        log_frame = tk.Frame(parent, bg="#1a1a1a")
         log_frame.pack(fill=tk.X, padx=20, pady=5)
         
         self.log_label = tk.Label(
@@ -398,7 +474,7 @@ class RobotApp:
 
         # Keyboard Guide
         guide = tk.Label(
-            self.root, 
+            parent,
             text="Controls: W (Forward) | S (Backward) | A (Turn Left) | D (Turn Right)", 
             font=("Helvetica", 10, "italic"), 
             bg="#1a1a1a", 
@@ -406,6 +482,24 @@ class RobotApp:
             pady=10
         )
         guide.pack()
+
+    def update_scroll_region(self, event=None):
+        self.scroll_canvas.configure(scrollregion=self.scroll_canvas.bbox("all"))
+
+    def resize_scroll_content(self, event):
+        self.scroll_canvas.itemconfigure(self.content_window, width=event.width)
+        self.update_scroll_region()
+
+    def handle_mousewheel(self, event):
+        if not hasattr(self, "scroll_canvas"):
+            return
+        if event.num == 4:
+            delta = -1
+        elif event.num == 5:
+            delta = 1
+        else:
+            delta = -1 if event.delta > 0 else 1
+        self.scroll_canvas.yview_scroll(delta, "units")
 
     def save_map_dialog(self):
         self.is_auto_running = False
@@ -468,6 +562,27 @@ class RobotApp:
         self.draw_map()
         self.root.after(100, self.animate_student_rl_training)
 
+    def train_student_rl_all_maps(self):
+        if self.is_training_running:
+            return
+        self.is_auto_running = False
+        self.is_training_running = False
+        self.pending_edge_start = None
+        self.active_path = None
+        episodes = self.training_episodes_var.get()
+        self.log_message = f"Training Student RL on all training maps ({episodes} episodes each)..."
+        self.update_status()
+        self.draw_map()
+        self.root.update_idletasks()
+        try:
+            self.log_message = self.service.train_student_rl_all_training_maps(
+                episodes=episodes
+            )
+        except Exception as exc:
+            self.log_message = f"Train-all failed: {exc}"
+        self.update_status()
+        self.draw_map()
+
     def animate_student_rl_training(self):
         if not self.is_training_running:
             return
@@ -485,6 +600,15 @@ class RobotApp:
     def stop_student_rl_training(self):
         self.is_training_running = False
         self.log_message = self.service.stop_student_rl_training()
+        self.update_status()
+        self.draw_map()
+
+    def reset_student_rl_policy(self):
+        self.is_auto_running = False
+        self.is_training_running = False
+        self.active_path = None
+        self.pending_edge_start = None
+        self.log_message = self.service.reset_student_rl_policy()
         self.update_status()
         self.draw_map()
 
@@ -700,6 +824,39 @@ class RobotApp:
             self.is_auto_running = False
         else:
             self.root.after(350, self.animate_two_map_qlearning_step)
+
+    def run_student_rl_policy(self):
+        if self.is_auto_running:
+            return
+        self.is_training_running = False
+        self.service.reset_robot()
+        self.pending_edge_start = None
+        self.active_path = None
+        self.is_auto_running = True
+        self.log_message = f"Running saved Student RL policy toward {self.service.get_goal()}."
+        self.update_status()
+        self.draw_map()
+        self.root.after(350, self.animate_student_rl_policy_step)
+
+    def animate_student_rl_policy_step(self):
+        if not self.is_auto_running:
+            return
+
+        status, message, path = self.service.step_toward_goal_with_known_student_rl()
+        self.active_path = path
+        self.active_path_color = "#ffca28"
+        self.log_message = message
+        self.update_status()
+        self.draw_map()
+
+        if status is True:
+            self.is_auto_running = False
+            self.log_message = f"Student RL policy reached {self.service.get_goal()}."
+            self.update_status()
+        elif status is False:
+            self.is_auto_running = False
+        else:
+            self.root.after(350, self.animate_student_rl_policy_step)
 
     def reset_robot(self):
         self.is_auto_running = False

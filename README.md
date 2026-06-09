@@ -29,6 +29,10 @@ In the app:
 - `Show Q-learning Path` draws a Q-learning route from the start to the goal.
 - `Run Two-map A*` animates the robot using `known_map` and replans as obstacles are discovered.
 - `Run Two-map Q` animates Q-learning using `known_map` and replans as obstacles are discovered.
+- `Run Student RL` animates the `Algo.StudentRL` policy using `known_map` and replans as obstacles are discovered.
+- `Train Student RL` continues training the one shared `Algo.StudentRL` policy on the current map and saves it to `maps/student_rl_policies/student_rl_policy.json`.
+- `Train One RL Model` continues training the same shared policy across every JSON map in `maps/training` and saves it back to `maps/student_rl_policies/student_rl_policy.json`.
+- `Reset RL Model` deletes `maps/student_rl_policies/student_rl_policy.json` and clears in-memory Student RL state so the next training starts fresh.
 - `Set Goal` lets you click a map node to move the goal.
 - `Toggle Sub-goal` lets you click a map node to add or remove a sub-goal.
 - `Toggle Node Obstacle` lets you click a node to block or unblock it.
