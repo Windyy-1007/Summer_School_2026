@@ -185,10 +185,14 @@ def map_dimensions(map_obj):
 
 
 def get_edge(map_obj, src_coord, dest_coord):
-    for edge in map_obj.edges:
-        if (edge.src.x, edge.src.y) == src_coord and (edge.dest.x, edge.dest.y) == dest_coord:
-            return edge
-    return None
+    cache_key = (id(map_obj.edges), len(map_obj.edges))
+    if getattr(map_obj, "_edge_lookup_cache_key", None) != cache_key:
+        map_obj._edge_lookup_cache = {
+            ((edge.src.x, edge.src.y), (edge.dest.x, edge.dest.y)): edge
+            for edge in map_obj.edges
+        }
+        map_obj._edge_lookup_cache_key = cache_key
+    return map_obj._edge_lookup_cache.get((src_coord, dest_coord))
 
 
 def canonical_edge(coord_a, coord_b):
