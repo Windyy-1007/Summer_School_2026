@@ -1,0 +1,31 @@
+{
+  "blocked_edges": [],
+  "blocked_nodes": [],
+  "checkpoints": [
+    [
+      0,
+      5
+    ],
+    [
+      5,
+      0
+    ]
+  ],
+  "goal": [
+    5,
+    5
+  ],
+  "height": 6,
+  "metadata": {
+    "difficulty": "starter",
+    "lesson": "Students can edit reward, sensor handling, and map data.",
+    "training_order": 3
+  },
+  "name": "Empty With Checkpoints",
+  "start": [
+    0,
+    0
+  ],
+  "version": 1,
+  "width": 6
+}

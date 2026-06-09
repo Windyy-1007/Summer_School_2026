@@ -1,0 +1,22 @@
+{
+  "blocked_edges": [],
+  "blocked_nodes": [],
+  "checkpoints": [],
+  "goal": [
+    4,
+    4
+  ],
+  "height": 5,
+  "metadata": {
+    "difficulty": "starter",
+    "lesson": "Students can edit reward, sensor handling, and map data.",
+    "training_order": 1
+  },
+  "name": "Empty Grid",
+  "start": [
+    0,
+    0
+  ],
+  "version": 1,
+  "width": 5
+}
