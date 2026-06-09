@@ -3,22 +3,15 @@ from dataclasses import dataclass, field
 
 from rl_library import (
     ACTIONS,
-    CHECKPOINT_SCR,
-    GOAL_SCR,
-    MOVE_SCR,
-    TURN_SCR,
     UP,
     calculate_score,
     checkpoint_count,
+    default_reward,
     get_state,
     manhattan,
     transition,
     valid_actions,
 )
-
-
-OBSTACLE_PENALTY = -25
-PROGRESS_REWARD = 5
 
 
 @dataclass
@@ -56,94 +49,17 @@ def _ensure_action_values(qtable, state):
     return qtable[state]
 
 
-def _all_checkpoints_reached(state, checkpoints=None):
-    return checkpoint_count(state.checkpoints_mask) >= len(checkpoints or [])
-
-
-def _is_terminal_state(state, goal, checkpoints=None):
-    return state.position == goal and _all_checkpoints_reached(state, checkpoints)
-
-
-def _remaining_checkpoints(state, checkpoints=None):
-    remaining = []
-    for index, checkpoint in enumerate(checkpoints or []):
-        if not state.checkpoints_mask & (1 << index):
-            remaining.append(tuple(checkpoint))
-    return remaining
-
-
-def _target_distance(state, goal, checkpoints=None):
-    targets = _remaining_checkpoints(state, checkpoints) or [goal]
-    return min(manhattan(state.position, target) for target in targets)
-
-
-def _transition_reward(result, goal, checkpoints=None):
-    reward = 0.0
-
-    if result.moved:
-        reward += MOVE_SCR
-    if result.turned:
-        reward += TURN_SCR
-    if result.hit_obstacle:
-        reward += OBSTACLE_PENALTY
-
-    before_distance = _target_distance(result.state, goal, checkpoints)
-    after_distance = _target_distance(result.next_state, goal, checkpoints)
-    reward += PROGRESS_REWARD * (before_distance - after_distance)
-
-    before_checkpoints = checkpoint_count(result.state.checkpoints_mask)
-    after_checkpoints = checkpoint_count(result.next_state.checkpoints_mask)
-    reward += max(0, after_checkpoints - before_checkpoints) * CHECKPOINT_SCR
-
-    if _is_terminal_state(result.next_state, goal, checkpoints):
-        reward += GOAL_SCR
-
-    return reward
-
-
-def _action_tie_breaker(map_obj, state, action, goal, checkpoints=None):
-    result = transition(map_obj, state, action, goal, checkpoints)
-    gained_checkpoints = (
-        checkpoint_count(result.next_state.checkpoints_mask)
-        - checkpoint_count(state.checkpoints_mask)
-    )
-    distance_gain = _target_distance(state, goal, checkpoints) - _target_distance(
-        result.next_state,
-        goal,
-        checkpoints,
-    )
-    return (
-        _is_terminal_state(result.next_state, goal, checkpoints),
-        gained_checkpoints,
-        distance_gain,
-        result.moved,
-        not result.hit_obstacle,
-        not result.turned,
-    )
-
-
-def best_action(qtable, state, map_obj=None, goal=None, checkpoints=None):
+def best_action(qtable, state):
     action_values = _ensure_action_values(qtable, state)
-    actions = valid_actions(state, map_obj)
-    best_value = max(action_values[action] for action in actions)
-    best_actions = [
-        action for action in actions if action_values[action] == best_value
-    ]
-
-    if map_obj is None or goal is None:
-        return best_actions[0]
-
-    return max(
-        best_actions,
-        key=lambda action: _action_tie_breaker(map_obj, state, action, goal, checkpoints),
-    )
+    return max(ACTIONS, key=lambda action: action_values[action])
 
 
-def choose_action(qtable, state, epsilon, rng, map_obj=None, goal=None, checkpoints=None):
+def choose_action(qtable, state, epsilon, rng, map_obj=None):
     actions = valid_actions(state, map_obj)
     if rng.random() < epsilon:
         return rng.choice(actions)
-    return best_action(qtable, state, map_obj, goal, checkpoints)
+    action_values = _ensure_action_values(qtable, state)
+    return max(actions, key=lambda action: action_values[action])
 
 
 def _is_better_result(candidate, current_best):
@@ -192,30 +108,26 @@ def run_episode(
     visited_greedy_states = set()
 
     for step_index in range(max_steps):
-        if _is_terminal_state(state, goal, checkpoints):
+        if state.position == goal:
             break
 
         if learning:
-            action = choose_action(qtable, state, epsilon, rng, map_obj, goal, checkpoints)
+            action = choose_action(qtable, state, epsilon, rng, map_obj)
         else:
-            action = best_action(qtable, state, map_obj, goal, checkpoints)
-            state_key = (state, action)
+            state_key = (state, best_action(qtable, state))
             if state_key in visited_greedy_states:
                 break
             visited_greedy_states.add(state_key)
+            action = best_action(qtable, state)
 
         result = transition(map_obj, state, action, goal, checkpoints)
-        reward = _transition_reward(result, goal, checkpoints)
+        reward = default_reward(result.next_state, goal)
         total_reward += reward
 
         if learning:
             action_values = _ensure_action_values(qtable, state)
             next_action_values = _ensure_action_values(qtable, result.next_state)
-            next_best_q = (
-                0.0
-                if _is_terminal_state(result.next_state, goal, checkpoints)
-                else max(next_action_values.values())
-            )
+            next_best_q = 0.0 if result.reached_goal else max(next_action_values.values())
             old_q = action_values[action]
             action_values[action] = old_q + alpha * (reward + gamma * next_best_q - old_q)
 
@@ -228,10 +140,10 @@ def run_episode(
         state = result.next_state
         min_distance = min(min_distance, manhattan(state.position, goal))
 
-        if _is_terminal_state(state, goal, checkpoints):
+        if result.reached_goal:
             break
 
-    reached_goal = _is_terminal_state(state, goal, checkpoints)
+    reached_goal = state.position == goal
     checkpoints_reached = checkpoint_count(state.checkpoints_mask)
     score = calculate_score(moves, turns, checkpoints_reached, reached_goal, min_distance)
 
@@ -377,3 +289,5 @@ def format_episode_log(result, total_checkpoints=0):
         f"goal={goal_text}, min distance {result.min_manhattan}, "
         f"moves={result.moves}, turns={result.turns}, epsilon={result.epsilon:.3f}"
     )
+
+
