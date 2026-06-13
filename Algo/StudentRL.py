@@ -1,6 +1,6 @@
-import random
 import json
 import os
+import random
 from dataclasses import dataclass, field
 
 from rl_library import (
@@ -50,12 +50,81 @@ class TrainingResult:
     last_result: EpisodeResult | None
     logs: list = field(default_factory=list)
 
+# Các implementation mặc định bên dưới là hợp lệ. TODO không có nghĩa là phải
+# xóa code đang có; học sinh có thể sửa từng hàm để thử nghiệm. TODO cũng không
+# có nghĩa là bắt buộc phải chỉnh sửa. 
+# Học sinh nên xây dựng state (build_state), action (available_actions) và reward (reward_function) phù hợp; 
+# các hàm khác mặc định đã ổn, tuy nhiên có thể cải thiện thêm nếu muốn.
+
 
 def create_qtable():
+    """Tạo Q-table rỗng: state -> {action: q_value}."""
+
+    # TODO: Có thể dùng defaultdict thay cho dict nếu đã học collections.
     return {}
 
 
+def build_state(state):
+    """Chọn thông tin nào của môi trường sẽ được dùng làm state trong Q-table.
+
+    Mặc định:
+        Dùng state tối giản gồm vị trí, hướng, checkpoint và context của map.
+        Các trường nâng cao của RLState sẽ nhận giá trị mặc định.
+
+    TODO - các ý tưởng có thể thử:
+        - Trả về state để dùng toàn bộ thông tin thư viện đã tính sẵn.
+        - Thêm obstacle_mask để robot nhìn vật cản xung quanh.
+        - Thêm target_forward/target_right để biết mục tiêu nằm ở đâu.
+        - Thêm last_action và recovery_mode để giảm lặp/va chạm.
+        - Bỏ vị trí x, y để thử học theo mẫu vật cản tương đối.
+
+    Hàm này phải trả về một RLState để policy có thể lưu vào JSON.
+    """
+
+    # TODO: Thay return bên dưới bằng `return state` để bắt đầu thử state đầy đủ.
+    return RLState(
+        state.x,
+        state.y,
+        state.dx,
+        state.dy,
+        state.checkpoints_mask,
+        state.context,
+    )
+
+
+def available_actions(state, map_obj=None):
+    """Trả về danh sách action robot được phép chọn tại state.
+
+    Mặc định thư viện cho phép cả 4 action:
+    forward, backward, turn_left và turn_right.
+
+    TODO - các ý tưởng có thể thử:
+        - Cấm BACKWARD để robot chỉ đi tiến và quay.
+        - Không cho chọn action đang bị vật cản chặn.
+        - Khi recovery_mode=True, ưu tiên quay hoặc đi lùi.
+
+    Lưu ý: cho phép action xấu cũng có ích, vì robot có thể thử và học từ reward
+    âm. Nếu lọc action quá sớm, robot sẽ không học được hậu quả của va chạm.
+    """
+
+    return valid_actions(state, map_obj)
+
+
 def best_action(qtable, state, map_obj=None, goal=None, checkpoints=None):
+    """Chọn action tốt nhất khi không khám phá.
+
+    Mặc định dùng greedy_action() của thư viện: chọn Q-value lớn nhất và dùng
+    thông tin bản đồ/mục tiêu để phá hòa nếu nhiều action bằng điểm.
+
+    TODO - cách Q-learning cơ bản:
+        1. Lấy các Q-value của state.
+        2. Chỉ xét available_actions().
+        3. Trả về action có Q-value lớn nhất.
+
+    Có thể nâng cấp bằng cách chọn ngẫu nhiên khi hòa, ưu tiên action ít thử,
+    hoặc tránh action vừa gây va chạm.
+    """
+
     return greedy_action(qtable, state, map_obj, goal, checkpoints)
 
 
@@ -68,13 +137,89 @@ def choose_action(
     goal=None,
     checkpoints=None,
 ):
-    actions = valid_actions(state, map_obj)
+    """Chọn action theo epsilon-greedy trong lúc train.
+
+    - Xác suất epsilon: explore, chọn ngẫu nhiên.
+    - Xác suất 1 - epsilon: exploit, chọn best_action().
+
+    TODO - các ý tưởng có thể thử:
+        - Thay cách giảm epsilon trong train().
+        - Tăng explore khi robot bị lặp.
+        - Chọn action ít được thử thay vì ngẫu nhiên hoàn toàn.
+    """
+
+    actions = available_actions(state, map_obj)
+    if not actions:
+        raise ValueError("available_actions() must return at least one action.")
+
     if rng.random() < epsilon:
         return rng.choice(actions)
     return best_action(qtable, state, map_obj, goal, checkpoints)
 
 
+def reward_function(result, goal, checkpoints=None):
+    """Trả về reward của một action.
+
+    Mặc định dùng reward đã được rl_library.transition() tính sẵn. Reward này
+    có điểm cho goal/checkpoint, phạt di chuyển/quay/va chạm, và thưởng khi tiến
+    gần mục tiêu.
+
+    TODO - có thể tự thiết kế reward đơn giản hơn, ví dụ:
+        reward = -1                         # mỗi action tốn thời gian
+        if result.hit_obstacle: reward -= 20
+        if result.moved: reward += 1
+        if result.reached_goal: reward += 100
+
+    Các ý tưởng nâng cấp:
+        - Thưởng khi giảm khoảng cách Manhattan.
+        - Phạt khi quay trái-phải liên tục.
+        - Thưởng checkpoint chỉ ở lần đầu.
+        - Thưởng khi thoát khỏi recovery mode.
+
+    Không dùng calculate_score() làm reward. Score là điểm kết quả cuối, còn
+    reward là tín hiệu sau từng action để Q-table học.
+    """
+
+    return result.reward
+
+
+def update_qtable(
+    qtable,
+    state,
+    action,
+    reward,
+    next_state,
+    terminal,
+    alpha,
+    gamma,
+):
+    """Cập nhật Q(state, action) sau một transition.
+
+    Công thức Q-learning:
+
+        target = reward + gamma * max Q(next_state, next_action)
+        new_q  = old_q + alpha * (target - old_q)
+
+    Nếu next_state là terminal thì không có reward tương lai, vì vậy
+    max Q(next_state, next_action) được xem là 0.
+
+    Mặc định update_q_values() cập nhật cả state chính xác và micro-pattern.
+
+    TODO - các ý tưởng có thể implement:
+        - Tự viết công thức trên bằng dict thay vì gọi update_q_values().
+        - Dùng SARSA: học theo action tiếp theo thật sự được chọn.
+        - Thay alpha theo số lần state-action đã được thăm.
+        - Tắt micro-pattern để so sánh khả năng học giữa các map.
+    """
+
+    next_best_q = 0.0 if terminal else max_learned_q(qtable, next_state)
+    target = reward + gamma * next_best_q
+    update_q_values(qtable, state, action, target, alpha)
+
+
 def _is_better_result(candidate, current_best):
+    """So sánh hai episode để giữ lại kết quả tốt hơn."""
+
     if current_best is None:
         return True
     if candidate.reached_goal != current_best.reached_goal:
@@ -89,6 +234,8 @@ def _is_better_result(candidate, current_best):
 
 
 def is_better_result(candidate, current_best):
+    """Hàm public để UI so sánh kết quả mà không dùng hàm nội bộ."""
+
     return _is_better_result(candidate, current_best)
 
 
@@ -114,6 +261,18 @@ def run_episode(
     last_action="",
     recovery_mode=False,
 ):
+    """Chạy một episode.
+
+    learning=True:
+        Chọn action bằng epsilon-greedy và cập nhật Q-table.
+
+    learning=False:
+        Chỉ chạy policy đã học. Nếu planner_fallback=True, robot có thể dùng
+        planner/recovery khi gặp state lạ hoặc bị lặp.
+
+    Hàm trả về EpisodeResult để UI hiện reward, score, path và các thống kê.
+    """
+
     rng = rng or random.Random()
     checkpoints = list(checkpoints or [])
     max_steps = max_steps or max(20, len(map_obj.nodes) * 8)
@@ -146,10 +305,15 @@ def run_episode(
         if is_terminal_state(state, goal, checkpoints):
             break
 
+        # State của môi trường vẫn giữ đầy đủ thông tin để transition và
+        # planner hoạt động. build_state() quyết định phần nào được đưa vào
+        # Q-table.
+        policy_state = build_state(state)
+
         if learning:
             action = choose_action(
                 qtable,
-                state,
+                policy_state,
                 epsilon,
                 rng,
                 map_obj,
@@ -174,7 +338,7 @@ def run_episode(
         else:
             action = best_action(
                 qtable,
-                state,
+                policy_state,
                 map_obj,
                 goal,
                 checkpoints,
@@ -186,21 +350,20 @@ def run_episode(
         visit_key = action_visit_key(state, action)
         action_counts[visit_key] = action_counts.get(visit_key, 0) + 1
         result = transition(map_obj, state, action, goal, checkpoints)
-        reward = result.reward
+        reward = reward_function(result, goal, checkpoints)
         total_reward += reward
 
         if learning:
-            next_best_q = (
-                0.0
-                if is_terminal_state(result.next_state, goal, checkpoints)
-                else max_learned_q(qtable, result.next_state)
-            )
-            update_q_values(
+            next_policy_state = build_state(result.next_state)
+            update_qtable(
                 qtable,
-                state,
+                policy_state,
                 action,
-                reward + gamma * next_best_q,
+                reward,
+                next_policy_state,
+                is_terminal_state(result.next_state, goal, checkpoints),
                 alpha,
+                gamma,
             )
 
         if result.moved:
@@ -256,6 +419,8 @@ def simulate_policy(
     last_action="",
     recovery_mode=False,
 ):
+    """Chạy Q-table mà không học thêm, tương đương epsilon=0."""
+
     return run_episode(
         qtable=qtable,
         map_obj=map_obj,
@@ -296,6 +461,17 @@ def train(
     qtable=None,
     context="",
 ):
+    """Train Q-table qua nhiều episode.
+
+    TODO - tham số có thể thử nghiệm:
+        - alpha: tốc độ học.
+        - gamma: mức coi trọng reward tương lai.
+        - epsilon_start/end/decay: lịch explore.
+        - episodes và max_steps: thời gian học.
+
+    Nếu qtable được truyền vào, hàm sẽ học tiếp trên model cũ.
+    """
+
     rng = random.Random(seed)
     qtable = qtable if qtable is not None else create_qtable()
     epsilon = epsilon_start
@@ -349,6 +525,8 @@ def get_policy_path(
     max_steps=None,
     context="",
 ):
+    """Trả về danh sách tọa độ mà greedy policy đã đi qua."""
+
     result = simulate_policy(
         qtable,
         map_obj,
@@ -375,6 +553,8 @@ def save_policy_json(
     policy_result=None,
     metadata=None,
 ):
+    """Lưu Q-table, thông tin map và kết quả train thành file JSON."""
+
     results = {}
     for label, result in (
         ("best", best_result),
@@ -464,6 +644,8 @@ def save_policy_json(
 
 
 def load_policy_json(file_path):
+    """Đọc policy JSON và khôi phục Q-table."""
+
     with open(file_path, "r", encoding="utf-8") as json_file:
         data = json.load(json_file)
 
@@ -497,6 +679,8 @@ def load_policy_json(file_path):
 
 
 def format_episode_log(result, total_checkpoints=0):
+    """Đổi EpisodeResult thành một dòng log ngắn gọn cho UI/terminal."""
+
     goal_text = "yes" if result.reached_goal else "no"
     return (
         f"Episode {result.episode}: reward={result.total_reward:.1f}, "
