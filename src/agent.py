@@ -1,8 +1,4 @@
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-
-from map import Node, Edge, LineMap
+from src.map import Node, Edge, LineMap
 from Algo.Astar import astar
 
 class Robot:

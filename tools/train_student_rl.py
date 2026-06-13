@@ -6,7 +6,7 @@ from Algo.StudentRL import format_episode_log, simulate_policy, train
 from rl_library import load_map_json
 
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TRAINING_MAP_DIR = os.path.join(ROOT_DIR, "maps", "training")
 
 

@@ -128,6 +128,15 @@ class RobotApp:
         )
         header.pack()
 
+        self.map_label = tk.Label(
+            parent,
+            text=f"Map: {self.service.get_map_name()}",
+            font=("Helvetica", 11, "bold"),
+            bg="#1a1a1a",
+            fg="#90caf9",
+        )
+        self.map_label.pack(pady=(0, 4))
+
         # Canvas for Drawing Map
         self.canvas = tk.Canvas(
             parent,
@@ -170,7 +179,7 @@ class RobotApp:
         )
         self.score_label.pack(side=tk.LEFT, padx=30)
 
-        # Planner Buttons
+        # Primary actions
         button_frame = tk.Frame(parent, bg="#1a1a1a")
         button_frame.pack(fill=tk.X, padx=20, pady=5)
         for column in range(3):
@@ -178,7 +187,7 @@ class RobotApp:
 
         self.astar_button = tk.Button(
             button_frame,
-            text="Show A* Path",
+            text="Show A* Reference",
             command=self.show_astar_path,
             bg="#263238",
             fg="#ffffff",
@@ -189,48 +198,6 @@ class RobotApp:
             pady=6
         )
         self.astar_button.grid(row=0, column=0, sticky="ew", padx=5, pady=3)
-
-        self.qlearning_button = tk.Button(
-            button_frame,
-            text="Show Q-learning Path",
-            command=self.show_qlearning_path,
-            bg="#263238",
-            fg="#ffffff",
-            activebackground="#37474f",
-            activeforeground="#ffffff",
-            relief=tk.FLAT,
-            padx=12,
-            pady=6
-        )
-        self.qlearning_button.grid(row=0, column=1, sticky="ew", padx=5, pady=3)
-
-        self.two_map_button = tk.Button(
-            button_frame,
-            text="Run Two-map A*",
-            command=self.run_two_map_astar,
-            bg="#00695c",
-            fg="#ffffff",
-            activebackground="#00897b",
-            activeforeground="#ffffff",
-            relief=tk.FLAT,
-            padx=12,
-            pady=6
-        )
-        self.two_map_button.grid(row=1, column=0, sticky="ew", padx=5, pady=3)
-
-        self.two_map_q_button = tk.Button(
-            button_frame,
-            text="Run Two-map Q",
-            command=self.run_two_map_qlearning,
-            bg="#6a1b9a",
-            fg="#ffffff",
-            activebackground="#8e24aa",
-            activeforeground="#ffffff",
-            relief=tk.FLAT,
-            padx=12,
-            pady=6
-        )
-        self.two_map_q_button.grid(row=1, column=1, sticky="ew", padx=5, pady=3)
 
         self.student_rl_run_button = tk.Button(
             button_frame,
@@ -244,7 +211,7 @@ class RobotApp:
             padx=12,
             pady=6
         )
-        self.student_rl_run_button.grid(row=1, column=2, sticky="ew", padx=5, pady=3)
+        self.student_rl_run_button.grid(row=0, column=1, sticky="ew", padx=5, pady=3)
 
         self.reset_button = tk.Button(
             button_frame,
@@ -260,7 +227,14 @@ class RobotApp:
         )
         self.reset_button.grid(row=0, column=2, sticky="ew", padx=5, pady=3)
 
-        edit_frame = tk.Frame(parent, bg="#1a1a1a")
+        edit_frame = tk.LabelFrame(
+            parent,
+            text="Map editor",
+            bg="#1a1a1a",
+            fg="#bdbdbd",
+            padx=5,
+            pady=5,
+        )
         edit_frame.pack(fill=tk.X, padx=20, pady=5)
 
         self.goal_button = tk.Button(
@@ -350,11 +324,26 @@ class RobotApp:
         )
         self.load_map_button.pack(side=tk.LEFT, padx=5)
 
-        training_frame = tk.Frame(parent, bg="#1a1a1a")
+        training_frame = tk.LabelFrame(
+            parent,
+            text="Student RL training",
+            bg="#1a1a1a",
+            fg="#bdbdbd",
+            padx=5,
+            pady=5,
+        )
         training_frame.pack(fill=tk.X, padx=20, pady=5)
+        for column in range(6):
+            training_frame.columnconfigure(column, weight=1 if column in (2, 3, 4, 5) else 0)
 
         self.training_map_var = tk.IntVar(value=1)
         training_count = max(1, len(self.service.get_training_map_files()))
+        tk.Label(
+            training_frame,
+            text="Map",
+            bg="#1a1a1a",
+            fg="#ffffff",
+        ).grid(row=0, column=0, padx=(5, 2), pady=3)
         self.training_map_spinbox = tk.Spinbox(
             training_frame,
             from_=1,
@@ -366,7 +355,7 @@ class RobotApp:
             buttonbackground="#37474f",
             relief=tk.FLAT
         )
-        self.training_map_spinbox.pack(side=tk.LEFT, padx=5)
+        self.training_map_spinbox.grid(row=0, column=1, padx=3, pady=3)
 
         self.load_training_button = tk.Button(
             training_frame,
@@ -380,9 +369,15 @@ class RobotApp:
             padx=12,
             pady=6
         )
-        self.load_training_button.pack(side=tk.LEFT, padx=5)
+        self.load_training_button.grid(row=0, column=2, sticky="ew", padx=3, pady=3)
 
         self.training_episodes_var = tk.IntVar(value=500)
+        tk.Label(
+            training_frame,
+            text="Episodes per map",
+            bg="#1a1a1a",
+            fg="#ffffff",
+        ).grid(row=1, column=0, padx=(5, 2), pady=3)
         self.training_episodes_spinbox = tk.Spinbox(
             training_frame,
             from_=50,
@@ -395,11 +390,11 @@ class RobotApp:
             buttonbackground="#37474f",
             relief=tk.FLAT
         )
-        self.training_episodes_spinbox.pack(side=tk.LEFT, padx=5)
+        self.training_episodes_spinbox.grid(row=1, column=1, padx=3, pady=3)
 
         self.train_rl_button = tk.Button(
             training_frame,
-            text="Train Student RL",
+            text="Train Current Map",
             command=self.run_student_rl_training,
             bg="#6a1b9a",
             fg="#ffffff",
@@ -409,11 +404,11 @@ class RobotApp:
             padx=12,
             pady=6
         )
-        self.train_rl_button.pack(side=tk.LEFT, padx=5)
+        self.train_rl_button.grid(row=1, column=2, sticky="ew", padx=3, pady=3)
 
         self.train_all_rl_button = tk.Button(
             training_frame,
-            text="Train One RL Model",
+            text="Train All Maps",
             command=self.train_student_rl_all_maps,
             bg="#ad1457",
             fg="#ffffff",
@@ -423,7 +418,7 @@ class RobotApp:
             padx=12,
             pady=6
         )
-        self.train_all_rl_button.pack(side=tk.LEFT, padx=5)
+        self.train_all_rl_button.grid(row=1, column=3, sticky="ew", padx=3, pady=3)
 
         self.stop_rl_button = tk.Button(
             training_frame,
@@ -437,7 +432,7 @@ class RobotApp:
             padx=12,
             pady=6
         )
-        self.stop_rl_button.pack(side=tk.LEFT, padx=5)
+        self.stop_rl_button.grid(row=1, column=4, sticky="ew", padx=3, pady=3)
 
         self.reset_rl_policy_button = tk.Button(
             training_frame,
@@ -451,7 +446,24 @@ class RobotApp:
             padx=12,
             pady=6
         )
-        self.reset_rl_policy_button.pack(side=tk.LEFT, padx=5)
+        self.reset_rl_policy_button.grid(row=1, column=5, sticky="ew", padx=3, pady=3)
+
+        self.training_progress_label = tk.Label(
+            training_frame,
+            text=self.service.get_student_rl_training_progress(),
+            font=("Consolas", 10, "bold"),
+            bg="#1a1a1a",
+            fg="#ffca28",
+            anchor="w",
+        )
+        self.training_progress_label.grid(
+            row=2,
+            column=0,
+            columnspan=6,
+            sticky="ew",
+            padx=5,
+            pady=(5, 2),
+        )
 
         # Console Log Box
         log_frame = tk.Frame(parent, bg="#1a1a1a")
@@ -557,7 +569,10 @@ class RobotApp:
         self.active_path_color = "#ffca28"
         self.is_training_running = True
         episodes = self.training_episodes_var.get()
-        self.log_message = self.service.start_student_rl_training(episodes=episodes, batch_size=25)
+        self.log_message = self.service.start_student_rl_training(
+            episodes=episodes,
+            batch_size=25,
+        )
         self.update_status()
         self.draw_map()
         self.root.after(100, self.animate_student_rl_training)
@@ -566,27 +581,33 @@ class RobotApp:
         if self.is_training_running:
             return
         self.is_auto_running = False
-        self.is_training_running = False
+        self.is_training_running = True
         self.pending_edge_start = None
         self.active_path = None
+        self.active_path_color = "#ffca28"
         episodes = self.training_episodes_var.get()
-        self.log_message = f"Training Student RL on all training maps ({episodes} episodes each)..."
+        self.log_message = self.service.start_student_rl_all_training_maps(
+            episodes=episodes,
+            batch_size=25,
+        )
         self.update_status()
         self.draw_map()
-        self.root.update_idletasks()
-        try:
-            self.log_message = self.service.train_student_rl_all_training_maps(
-                episodes=episodes
-            )
-        except Exception as exc:
-            self.log_message = f"Train-all failed: {exc}"
-        self.update_status()
-        self.draw_map()
+        if not self.service.is_student_rl_training_active():
+            self.is_training_running = False
+            return
+        self.root.after(50, self.animate_student_rl_training)
 
     def animate_student_rl_training(self):
         if not self.is_training_running:
             return
-        done, message, path = self.service.train_student_rl_batch()
+        try:
+            done, message, path = self.service.train_student_rl_batch()
+        except Exception as exc:
+            self.is_training_running = False
+            self.service.stop_student_rl_training()
+            self.log_message = f"Student RL training failed: {exc}"
+            self.update_status()
+            return
         self.active_path = path
         self.active_path_color = "#ffca28"
         self.log_message = message
@@ -595,7 +616,7 @@ class RobotApp:
         if done:
             self.is_training_running = False
         else:
-            self.root.after(120, self.animate_student_rl_training)
+            self.root.after(10, self.animate_student_rl_training)
 
     def stop_student_rl_training(self):
         self.is_training_running = False
@@ -653,6 +674,10 @@ class RobotApp:
         self.pos_label.config(text=f"Position: ({self.service.get_robot_x()}, {self.service.get_robot_y()})")
         self.dir_label.config(text=f"Heading: {self.service.get_robot_direction_name().upper()}")
         self.score_label.config(text=f"Score: {self.service.get_score()}")
+        self.map_label.config(text=f"Map: {self.service.get_map_name()}")
+        self.training_progress_label.config(
+            text=self.service.get_student_rl_training_progress()
+        )
         self.log_label.config(text="\n".join(self.log_lines))
 
     def set_edit_mode(self, mode):

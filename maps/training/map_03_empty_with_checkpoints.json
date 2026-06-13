@@ -3,21 +3,22 @@
   "blocked_nodes": [],
   "checkpoints": [
     [
-      0,
-      5
+      1,
+      10
     ],
     [
-      5,
-      0
+      16,
+      1
     ]
   ],
   "goal": [
-    5,
-    5
+    17,
+    11
   ],
-  "height": 6,
+  "height": 12,
   "metadata": {
     "difficulty": "starter",
+    "dimensions": "18x12",
     "lesson": "Students can edit reward, sensor handling, and map data.",
     "training_order": 3
   },
@@ -27,5 +28,5 @@
     0
   ],
   "version": 1,
-  "width": 6
+  "width": 18
 }

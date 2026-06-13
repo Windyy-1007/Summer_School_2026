@@ -1,13 +1,8 @@
 import unittest
-import sys
-import os
 import random
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-
-from map import LineMap
-from agent import Robot
+from src.map import LineMap
+from src.agent import Robot
 from Algo.Astar import astar, astar_route
 from Algo.QLearning import get_path as ql_get_path
 

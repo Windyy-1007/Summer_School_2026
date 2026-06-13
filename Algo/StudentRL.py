@@ -1,15 +1,23 @@
 import random
+import json
+import os
 from dataclasses import dataclass, field
 
 from rl_library import (
     ACTIONS,
+    RLState,
     UP,
+    action_visit_key,
     calculate_score,
     checkpoint_count,
-    default_reward,
+    greedy_action,
     get_state,
+    is_terminal_state,
     manhattan,
+    max_learned_q,
+    runtime_action,
     transition,
+    update_q_values,
     valid_actions,
 )
 
@@ -27,7 +35,11 @@ class EpisodeResult:
     steps: int
     epsilon: float
     path: list = field(default_factory=list)
+    actions: list = field(default_factory=list)
+    action_sources: list = field(default_factory=list)
     final_state: object | None = None
+    planner_fallback_steps: int = 0
+    recovery_steps: int = 0
 
 
 @dataclass
@@ -43,23 +55,23 @@ def create_qtable():
     return {}
 
 
-def _ensure_action_values(qtable, state):
-    if state not in qtable:
-        qtable[state] = {action: 0.0 for action in ACTIONS}
-    return qtable[state]
+def best_action(qtable, state, map_obj=None, goal=None, checkpoints=None):
+    return greedy_action(qtable, state, map_obj, goal, checkpoints)
 
 
-def best_action(qtable, state):
-    action_values = _ensure_action_values(qtable, state)
-    return max(ACTIONS, key=lambda action: action_values[action])
-
-
-def choose_action(qtable, state, epsilon, rng, map_obj=None):
+def choose_action(
+    qtable,
+    state,
+    epsilon,
+    rng,
+    map_obj=None,
+    goal=None,
+    checkpoints=None,
+):
     actions = valid_actions(state, map_obj)
     if rng.random() < epsilon:
         return rng.choice(actions)
-    action_values = _ensure_action_values(qtable, state)
-    return max(actions, key=lambda action: action_values[action])
+    return best_action(qtable, state, map_obj, goal, checkpoints)
 
 
 def _is_better_result(candidate, current_best):
@@ -94,42 +106,102 @@ def run_episode(
     rng=None,
     learning=True,
     initial_direction=UP,
+    context="",
+    reached_checkpoints=None,
+    planner_fallback=False,
+    action_counts=None,
+    position_counts=None,
+    last_action="",
+    recovery_mode=False,
 ):
     rng = rng or random.Random()
     checkpoints = list(checkpoints or [])
     max_steps = max_steps or max(20, len(map_obj.nodes) * 8)
 
-    state = get_state(start, initial_direction, checkpoints)
+    state = get_state(
+        start,
+        initial_direction,
+        checkpoints,
+        reached_checkpoints=reached_checkpoints,
+        context=context,
+        map_obj=map_obj,
+        goal=goal,
+        last_action=last_action,
+        recovery_mode=recovery_mode,
+    )
     path = [start]
+    actions_taken = []
+    action_sources = []
     total_reward = 0.0
     moves = 0
     turns = 0
     min_distance = manhattan(start, goal)
-    visited_greedy_states = set()
+    planner_fallback_steps = 0
+    recovery_steps = 0
+    action_counts = dict(action_counts or {})
+    position_counts = dict(position_counts or {})
+    position_counts[state.position] = position_counts.get(state.position, 0) + 1
 
     for step_index in range(max_steps):
-        if state.position == goal:
+        if is_terminal_state(state, goal, checkpoints):
             break
 
         if learning:
-            action = choose_action(qtable, state, epsilon, rng, map_obj)
+            action = choose_action(
+                qtable,
+                state,
+                epsilon,
+                rng,
+                map_obj,
+                goal,
+                checkpoints,
+            )
+            action_source = "learning"
+        elif planner_fallback:
+            action, action_source = runtime_action(
+                qtable,
+                map_obj,
+                state,
+                goal,
+                checkpoints,
+                action_counts,
+                position_counts,
+            )
+            if action_source == "planner":
+                planner_fallback_steps += 1
+            elif action_source == "recovery":
+                recovery_steps += 1
         else:
-            state_key = (state, best_action(qtable, state))
-            if state_key in visited_greedy_states:
-                break
-            visited_greedy_states.add(state_key)
-            action = best_action(qtable, state)
+            action = best_action(
+                qtable,
+                state,
+                map_obj,
+                goal,
+                checkpoints,
+            )
+            action_source = "policy"
 
+        actions_taken.append(action)
+        action_sources.append(action_source)
+        visit_key = action_visit_key(state, action)
+        action_counts[visit_key] = action_counts.get(visit_key, 0) + 1
         result = transition(map_obj, state, action, goal, checkpoints)
-        reward = default_reward(result.next_state, goal)
+        reward = result.reward
         total_reward += reward
 
         if learning:
-            action_values = _ensure_action_values(qtable, state)
-            next_action_values = _ensure_action_values(qtable, result.next_state)
-            next_best_q = 0.0 if result.reached_goal else max(next_action_values.values())
-            old_q = action_values[action]
-            action_values[action] = old_q + alpha * (reward + gamma * next_best_q - old_q)
+            next_best_q = (
+                0.0
+                if is_terminal_state(result.next_state, goal, checkpoints)
+                else max_learned_q(qtable, result.next_state)
+            )
+            update_q_values(
+                qtable,
+                state,
+                action,
+                reward + gamma * next_best_q,
+                alpha,
+            )
 
         if result.moved:
             moves += 1
@@ -138,12 +210,13 @@ def run_episode(
             turns += 1
 
         state = result.next_state
+        position_counts[state.position] = position_counts.get(state.position, 0) + 1
         min_distance = min(min_distance, manhattan(state.position, goal))
 
-        if result.reached_goal:
+        if is_terminal_state(state, goal, checkpoints):
             break
 
-    reached_goal = state.position == goal
+    reached_goal = is_terminal_state(state, goal, checkpoints)
     checkpoints_reached = checkpoint_count(state.checkpoints_mask)
     score = calculate_score(moves, turns, checkpoints_reached, reached_goal, min_distance)
 
@@ -159,7 +232,11 @@ def run_episode(
         steps=step_index + 1 if "step_index" in locals() else 0,
         epsilon=epsilon,
         path=path,
+        actions=actions_taken,
+        action_sources=action_sources,
         final_state=state,
+        planner_fallback_steps=planner_fallback_steps,
+        recovery_steps=recovery_steps,
     )
 
 
@@ -171,6 +248,13 @@ def simulate_policy(
     checkpoints=None,
     max_steps=None,
     initial_direction=UP,
+    context="",
+    reached_checkpoints=None,
+    planner_fallback=False,
+    action_counts=None,
+    position_counts=None,
+    last_action="",
+    recovery_mode=False,
 ):
     return run_episode(
         qtable=qtable,
@@ -184,6 +268,13 @@ def simulate_policy(
         rng=random.Random(0),
         learning=False,
         initial_direction=initial_direction,
+        context=context,
+        reached_checkpoints=reached_checkpoints,
+        planner_fallback=planner_fallback,
+        action_counts=action_counts,
+        position_counts=position_counts,
+        last_action=last_action,
+        recovery_mode=recovery_mode,
     )
 
 
@@ -202,9 +293,11 @@ def train(
     log_every=50,
     log_callback=None,
     seed=42,
+    qtable=None,
+    context="",
 ):
     rng = random.Random(seed)
-    qtable = create_qtable()
+    qtable = qtable if qtable is not None else create_qtable()
     epsilon = epsilon_start
     logs = []
     best_result = None
@@ -224,6 +317,7 @@ def train(
             max_steps=max_steps,
             rng=rng,
             learning=True,
+            context=context,
         )
 
         if _is_better_result(last_result, best_result):
@@ -246,16 +340,130 @@ def train(
     )
 
 
-def get_policy_path(qtable, map_obj, start, goal, checkpoints=None, max_steps=None):
-    result = simulate_policy(qtable, map_obj, start, goal, checkpoints, max_steps)
+def get_policy_path(
+    qtable,
+    map_obj,
+    start,
+    goal,
+    checkpoints=None,
+    max_steps=None,
+    context="",
+):
+    result = simulate_policy(
+        qtable,
+        map_obj,
+        start,
+        goal,
+        checkpoints,
+        max_steps,
+        context=context,
+    )
     return result.path
 
 
+def save_policy_json(
+    file_path,
+    qtable,
+    episodes,
+    map_name="student_rl_policy",
+    map_file=None,
+    start=None,
+    goal=None,
+    checkpoints=None,
+    best_result=None,
+    last_result=None,
+    policy_result=None,
+    metadata=None,
+):
+    results = {}
+    for label, result in (
+        ("best", best_result),
+        ("last", last_result),
+        ("policy", policy_result),
+    ):
+        if result is None:
+            continue
+        results[label] = {
+            "episode": result.episode,
+            "total_reward": result.total_reward,
+            "score": result.score,
+            "reached_goal": result.reached_goal,
+            "checkpoints_reached": result.checkpoints_reached,
+            "min_manhattan": result.min_manhattan,
+            "moves": result.moves,
+            "turns": result.turns,
+            "steps": result.steps,
+            "epsilon": result.epsilon,
+            "path": [list(coord) for coord in result.path],
+            "actions": list(result.actions),
+            "action_sources": list(result.action_sources),
+            "planner_fallback_steps": result.planner_fallback_steps,
+            "recovery_steps": result.recovery_steps,
+        }
+
+    rows = []
+    for state in sorted(
+        qtable,
+        key=lambda item: (
+            item.context,
+            item.x,
+            item.y,
+            item.dx,
+            item.dy,
+            item.checkpoints_mask,
+            item.obstacle_mask,
+            item.target_forward,
+            item.target_right,
+            item.target_is_checkpoint,
+            item.last_action,
+            item.recovery_mode,
+        ),
+    ):
+        rows.append(
+            {
+                "state": {
+                    "x": state.x,
+                    "y": state.y,
+                    "dx": state.dx,
+                    "dy": state.dy,
+                    "checkpoints_mask": state.checkpoints_mask,
+                    "context": state.context,
+                    "obstacle_mask": state.obstacle_mask,
+                    "target_forward": state.target_forward,
+                    "target_right": state.target_right,
+                    "target_is_checkpoint": state.target_is_checkpoint,
+                    "last_action": state.last_action,
+                    "recovery_mode": state.recovery_mode,
+                },
+                "actions": {
+                    action: float(qtable[state].get(action, 0.0))
+                    for action in ACTIONS
+                },
+            }
+        )
+
+    data = {
+        "version": 1,
+        "algorithm": "student_q_learning",
+        "map_name": str(map_name),
+        "map_file": map_file,
+        "start": list(start) if start is not None else None,
+        "goal": list(goal) if goal is not None else None,
+        "checkpoints": [list(coord) for coord in checkpoints or []],
+        "episodes": int(episodes),
+        "qtable": rows,
+        "results": results,
+        "metadata": dict(metadata or {}),
+    }
+    folder = os.path.dirname(os.path.abspath(file_path))
+    os.makedirs(folder, exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as json_file:
+        json.dump(data, json_file, indent=2, sort_keys=True)
+        json_file.write("\n")
+    return data
+
+
 def load_policy_json(file_path):
-    import json
-
-    from rl_library import RLState
-
     with open(file_path, "r", encoding="utf-8") as json_file:
         data = json.load(json_file)
 
@@ -271,6 +479,13 @@ def load_policy_json(file_path):
             int(state_data["dx"]),
             int(state_data["dy"]),
             int(state_data.get("checkpoints_mask", 0)),
+            str(state_data.get("context", "")),
+            int(state_data.get("obstacle_mask", 0)),
+            int(state_data.get("target_forward", 0)),
+            int(state_data.get("target_right", 0)),
+            bool(state_data.get("target_is_checkpoint", False)),
+            str(state_data.get("last_action", "")),
+            bool(state_data.get("recovery_mode", False)),
         )
         action_values = row.get("actions", {})
         qtable[state] = {

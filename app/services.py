@@ -1,26 +1,26 @@
-import sys
 import os
 import random
 
-# Add src folder to path to allow importing map and agent
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src'))
-if root_dir not in sys.path:
-    sys.path.append(root_dir)
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
 
-from map import LineMap
-from agent import Robot
+from src.map import LineMap
+from src.agent import Robot
 from Algo.Astar import astar_route
 from Algo.QLearning import get_path as qlearning_path
 from Algo import StudentRL
 from rl_library import (
+    ACTION_LABELS,
+    BACKWARD,
     CHECKPOINT_SCR,
+    FORWARD,
     GOAL_SCR,
     MOVE_SCR,
+    TURN_LEFT,
+    TURN_RIGHT,
     TURN_SCR,
+    action_visit_key,
     calculate_score,
+    get_state,
     load_map_json,
     manhattan,
     save_map_json,
@@ -53,6 +53,10 @@ class SimulationService:
         self.student_rl_run_qtable = None
         self.student_rl_run_signature = None
         self.student_rl_run_policy_data = None
+        self.student_rl_action_counts = {}
+        self.student_rl_position_counts = {}
+        self.student_rl_last_action = ""
+        self.student_rl_recovery_mode = False
         
         # Gọi phương thức thiết lập vật cản
         self.configure_obstacles()
@@ -110,6 +114,30 @@ class SimulationService:
             if filename.lower().endswith(".json")
         )
 
+    def _student_rl_policy_context(self, file_path=None):
+        map_file = file_path or self.current_map_file_path
+        if map_file:
+            return os.path.relpath(map_file, root_dir).replace("\\", "/").casefold()
+        return (
+            f"{self.map_name}|{self.map_width}x{self.map_height}|"
+            f"{self.start}|{self.goal}|{tuple(self.sub_goals)}"
+        )
+
+    def _apply_map_data(self, map_data, file_path=None, clear_training=True):
+        self.map = map_data.line_map
+        self.map_width = map_data.width
+        self.map_height = map_data.height
+        self.map_size = max(self.map_width, self.map_height)
+        self.map_name = map_data.name
+        self.current_map_file_path = file_path
+        self.start = map_data.start
+        self.goal = map_data.goal
+        self.sub_goals = list(map_data.checkpoints)
+        self.active_training_path = None
+        if clear_training:
+            self.clear_student_rl_training()
+        self.reset_robot()
+
     def clear_student_rl_training(self):
         self.student_rl_training = None
         self.student_rl_qtable = None
@@ -133,18 +161,7 @@ class SimulationService:
 
     def load_map(self, file_path):
         map_data = load_map_json(file_path)
-        self.map = map_data.line_map
-        self.map_width = map_data.width
-        self.map_height = map_data.height
-        self.map_size = max(self.map_width, self.map_height)
-        self.map_name = map_data.name
-        self.current_map_file_path = file_path
-        self.start = map_data.start
-        self.goal = map_data.goal
-        self.sub_goals = list(map_data.checkpoints)
-        self.active_training_path = None
-        self.clear_student_rl_training()
-        self.reset_robot()
+        self._apply_map_data(map_data, file_path)
         return (
             f"Loaded map '{self.map_name}' ({self.map_width}x{self.map_height}) "
             f"with {len(self.sub_goals)} checkpoints."
@@ -181,6 +198,10 @@ class SimulationService:
         self.student_rl_run_qtable = None
         self.student_rl_run_signature = None
         self.student_rl_run_policy_data = None
+        self.student_rl_action_counts = {}
+        self.student_rl_position_counts = {self.start: 1}
+        self.student_rl_last_action = ""
+        self.student_rl_recovery_mode = False
         self.reset_score_state()
 
     def reset_score_state(self):
@@ -220,6 +241,7 @@ class SimulationService:
         self.student_rl_qtable, policy_data = self.load_student_rl_policy()
         self.student_rl_best_result = None
         self.student_rl_training = {
+            "mode": "current_map",
             "episode": 0,
             "episodes": max(1, int(episodes)),
             "previous_episodes": int((policy_data or {}).get("episodes", 0)),
@@ -231,12 +253,61 @@ class SimulationService:
             "gamma": 0.9,
             "rng": random.Random(seed),
             "last_result": None,
+            "context": self._student_rl_policy_context(),
         }
         action = "Updating existing" if policy_data else "Creating"
         return (
             f"{action} shared Student RL policy for {episodes} more episodes "
             f"on '{self.map_name}'."
         )
+
+    def start_student_rl_all_training_maps(self, episodes=500, batch_size=10, seed=42):
+        map_files = self.get_training_map_files()
+        if not map_files:
+            self.student_rl_training = None
+            return "No training maps found."
+
+        self.student_rl_qtable, policy_data = self.load_student_rl_policy()
+        self.student_rl_best_result = None
+        first_map = load_map_json(map_files[0])
+        self._apply_map_data(first_map, map_files[0], clear_training=False)
+        self.student_rl_training = {
+            "mode": "all_maps",
+            "episode": 0,
+            "episodes": max(1, int(episodes)),
+            "previous_episodes": int((policy_data or {}).get("episodes", 0)),
+            "batch_size": max(1, int(batch_size)),
+            "epsilon": 1.0,
+            "epsilon_end": 0.05,
+            "epsilon_decay": 0.995,
+            "alpha": 0.2,
+            "gamma": 0.9,
+            "rng": random.Random(seed),
+            "seed": int(seed),
+            "last_result": None,
+            "context": self._student_rl_policy_context(map_files[0]),
+            "map_files": map_files,
+            "map_index": 0,
+            "evaluation": [],
+        }
+        return (
+            f"Training map 1/{len(map_files)}: '{self.map_name}' "
+            f"for {episodes} episodes."
+        )
+
+    def get_student_rl_training_progress(self):
+        training = self.student_rl_training
+        if training is None:
+            return "RL training idle"
+        if training["mode"] == "all_maps":
+            return (
+                f"Map {training['map_index'] + 1}/{len(training['map_files'])} | "
+                f"Episode {training['episode']}/{training['episodes']}"
+            )
+        return f"Episode {training['episode']}/{training['episodes']}"
+
+    def is_student_rl_training_active(self):
+        return self.student_rl_training is not None
 
     def train_student_rl_batch(self):
         if self.student_rl_training is None or self.student_rl_qtable is None:
@@ -262,6 +333,7 @@ class SimulationService:
                 gamma=training["gamma"],
                 rng=training["rng"],
                 learning=True,
+                context=training["context"],
             )
             training["last_result"] = last_result
             if StudentRL.is_better_result(last_result, self.student_rl_best_result):
@@ -277,10 +349,17 @@ class SimulationService:
             self.start,
             self.goal,
             self.sub_goals,
+            context=training["context"],
         )
         done = training["episode"] >= training["episodes"]
         message = StudentRL.format_episode_log(last_result or policy_result, len(self.sub_goals))
-        if done:
+        if training["mode"] == "all_maps":
+            message = (
+                f"Map {training['map_index'] + 1}/{len(training['map_files'])} | "
+                f"{message}"
+            )
+
+        if done and training["mode"] == "current_map":
             policy_file = self.save_student_rl_policy(
                 self.student_rl_qtable,
                 training["previous_episodes"] + training["episodes"],
@@ -296,7 +375,95 @@ class SimulationService:
             )
             rel_policy_file = os.path.relpath(policy_file, root_dir)
             message += f" Training complete. Saved policy to {rel_policy_file}."
-        return done, message, policy_result.path
+            self.student_rl_training = None
+            return True, message, policy_result.path
+
+        if done:
+            map_file = training["map_files"][training["map_index"]]
+            training["evaluation"].append(
+                {
+                    "map_name": self.map_name,
+                    "map_file": os.path.relpath(map_file, root_dir),
+                    "reached_goal": policy_result.reached_goal,
+                    "checkpoints_reached": policy_result.checkpoints_reached,
+                    "total_checkpoints": len(self.sub_goals),
+                    "score": policy_result.score,
+                    "moves": policy_result.moves,
+                    "turns": policy_result.turns,
+                    "path": [list(coord) for coord in policy_result.path],
+                }
+            )
+
+            if training["map_index"] + 1 < len(training["map_files"]):
+                completed_name = self.map_name
+                completed_reached = policy_result.reached_goal
+                training["map_index"] += 1
+                next_file = training["map_files"][training["map_index"]]
+                next_map = load_map_json(next_file)
+                self._apply_map_data(next_map, next_file, clear_training=False)
+                training["episode"] = 0
+                training["epsilon"] = 1.0
+                training["last_result"] = None
+                training["context"] = self._student_rl_policy_context(next_file)
+                training["rng"] = random.Random(
+                    training["seed"] + training["map_index"] + 1
+                )
+                self.student_rl_best_result = None
+                result_text = "reached goal" if completed_reached else "did not reach goal"
+                message = (
+                    f"Completed '{completed_name}' ({result_text}). "
+                    f"Starting map {training['map_index'] + 1}/"
+                    f"{len(training['map_files'])}: '{self.map_name}'."
+                )
+                return False, message, [self.start]
+
+            reached = sum(
+                1 for result in training["evaluation"]
+                if result["reached_goal"]
+            )
+            failed = [
+                result["map_name"]
+                for result in training["evaluation"]
+                if not result["reached_goal"]
+            ]
+            total_maps = len(training["map_files"])
+            total_episodes = training["previous_episodes"] + (
+                training["episodes"] * total_maps
+            )
+            policy_file = self.save_student_rl_policy(
+                qtable=self.student_rl_qtable,
+                episodes=total_episodes,
+                metadata={
+                    "last_training_mode": "all_training_maps",
+                    "episodes_per_map": training["episodes"],
+                    "previous_recorded_episodes": training["previous_episodes"],
+                    "total_recorded_episodes": total_episodes,
+                    "training_maps": [
+                        {
+                            "map_name": result["map_name"],
+                            "map_file": result["map_file"],
+                        }
+                        for result in training["evaluation"]
+                    ],
+                    "evaluation": training["evaluation"],
+                },
+            )
+            rel_policy_file = os.path.relpath(policy_file, root_dir)
+            message = (
+                f"Trained one shared Student RL model on {total_maps} maps "
+                f"({training['episodes']} episodes each). Saved one policy to "
+                f"{rel_policy_file}. Greedy policy reached goal on "
+                f"{reached}/{total_maps} maps."
+            )
+            if failed:
+                message += " Failed: " + ", ".join(failed[:3])
+                if len(failed) > 3:
+                    message += f", +{len(failed) - 3} more"
+                message += "."
+            self.student_rl_training = None
+            return True, message, policy_result.path
+
+        return False, message, policy_result.path
 
     def _policy_file_path(self, map_name=None, map_file=None):
         return os.path.join(self.get_student_rl_policy_dir(), STUDENT_RL_POLICY_FILENAME)
@@ -344,92 +511,16 @@ class SimulationService:
         return file_path
 
     def train_student_rl_all_training_maps(self, episodes=500, seed=42):
-        map_files = self.get_training_map_files()
-        if not map_files:
-            return "No training maps found."
-
-        shared_qtable, policy_data = self.load_student_rl_policy()
-        previous_episodes = int((policy_data or {}).get("episodes", 0))
-        loaded_maps = []
-
-        for index, file_path in enumerate(map_files, start=1):
-            map_data = load_map_json(file_path)
-            loaded_maps.append((file_path, map_data))
-            StudentRL.train(
-                map_obj=map_data.line_map,
-                start=map_data.start,
-                goal=map_data.goal,
-                checkpoints=map_data.checkpoints,
-                episodes=episodes,
-                log_every=max(1, episodes),
-                seed=seed + index,
-                qtable=shared_qtable,
-            )
-
-        reached = 0
-        failed = []
-        evaluation = []
-
-        for file_path, map_data in loaded_maps:
-            policy_result = StudentRL.simulate_policy(
-                shared_qtable,
-                map_data.line_map,
-                map_data.start,
-                map_data.goal,
-                map_data.checkpoints,
-            )
-            rel_map_file = os.path.relpath(file_path, root_dir)
-            evaluation.append(
-                {
-                    "map_name": map_data.name,
-                    "map_file": rel_map_file,
-                    "reached_goal": policy_result.reached_goal,
-                    "checkpoints_reached": policy_result.checkpoints_reached,
-                    "total_checkpoints": len(map_data.checkpoints),
-                    "score": policy_result.score,
-                    "moves": policy_result.moves,
-                    "turns": policy_result.turns,
-                    "path": [list(coord) for coord in policy_result.path],
-                }
-            )
-            if policy_result.reached_goal:
-                reached += 1
-            else:
-                failed.append(map_data.name)
-
-        policy_file = self.save_student_rl_policy(
-            qtable=shared_qtable,
-            episodes=previous_episodes + episodes * len(loaded_maps),
-            map_file=None,
-            start=None,
-            goal=None,
-            checkpoints=[],
-            metadata={
-                "last_training_mode": "all_training_maps",
-                "episodes_per_map": episodes,
-                "previous_recorded_episodes": previous_episodes,
-                "total_recorded_episodes": previous_episodes + episodes * len(loaded_maps),
-                "training_maps": [
-                    {
-                        "map_name": map_data.name,
-                        "map_file": os.path.relpath(file_path, root_dir),
-                    }
-                    for file_path, map_data in loaded_maps
-                ],
-                "evaluation": evaluation,
-            },
+        message = self.start_student_rl_all_training_maps(
+            episodes=episodes,
+            batch_size=max(1, min(int(episodes), 100)),
+            seed=seed,
         )
-        rel_policy_file = os.path.relpath(policy_file, root_dir)
-        message = (
-            f"Trained one shared Student RL model on {len(map_files)} maps "
-            f"({episodes} episodes each). Saved one policy to {rel_policy_file}. "
-            f"Greedy policy reached goal on {reached}/{len(map_files)} maps."
-        )
-        if failed:
-            message += " Failed: " + ", ".join(failed[:3])
-            if len(failed) > 3:
-                message += f", +{len(failed) - 3} more"
-            message += "."
+        if self.student_rl_training is None:
+            return message
+        done = False
+        while not done:
+            done, message, _ = self.train_student_rl_batch()
         return message
 
     def get_student_rl_policy_path(self):
@@ -441,6 +532,7 @@ class SimulationService:
             self.start,
             self.goal,
             self.sub_goals,
+            context=self._student_rl_policy_context(),
         )
 
     def stop_student_rl_training(self):
@@ -617,22 +709,28 @@ class SimulationService:
 
         signature = self._student_rl_run_state_signature()
         start = (self.robot.x, self.robot.y)
-        remaining_sub_goals = self.get_remaining_sub_goals()
 
-        if self.student_rl_run_qtable is None or signature != self.student_rl_run_signature:
+        if self.student_rl_run_qtable is None:
             self.student_rl_run_qtable, self.student_rl_run_policy_data = self.load_student_rl_policy()
             if self.student_rl_run_policy_data is None:
                 self.student_rl_run_qtable = None
                 return None, None
-            self.student_rl_run_signature = signature
+        self.student_rl_run_signature = signature
 
         policy = StudentRL.simulate_policy(
             self.student_rl_run_qtable,
             self.robot.known_map,
             start,
             self.goal,
-            remaining_sub_goals,
+            self.sub_goals,
             initial_direction=self.robot.direction,
+            context=self._student_rl_policy_context(),
+            reached_checkpoints=self.reached_sub_goals,
+            planner_fallback=True,
+            action_counts=self.student_rl_action_counts,
+            position_counts=self.student_rl_position_counts,
+            last_action=self.student_rl_last_action,
+            recovery_mode=self.student_rl_recovery_mode,
         )
         return policy, self.student_rl_run_policy_data
 
@@ -649,32 +747,88 @@ class SimulationService:
             )
 
         path = policy.path
-        if not policy.reached_goal or len(path) < 2:
+        if not policy.actions:
             episodes_text = policy_data.get("episodes", 0) if policy_data else 0
             return (
                 False,
-                f"Saved Student RL policy found no complete path on known_map "
+                f"Saved Student RL policy could not choose a valid action "
                 f"(trained episodes recorded: {episodes_text}).",
                 path,
             )
 
-        next_coord = path[1]
+        action = policy.actions[0]
+        action_source = policy.action_sources[0]
         before_coord = (self.robot.x, self.robot.y)
         before_direction = self.robot.direction
-        moved = self.robot._moveTo(next_coord)
+        state = get_state(
+            before_coord,
+            before_direction,
+            self.sub_goals,
+            reached_checkpoints=self.reached_sub_goals,
+            context=self._student_rl_policy_context(),
+            map_obj=self.robot.known_map,
+            goal=self.goal,
+            last_action=self.student_rl_last_action,
+            recovery_mode=self.student_rl_recovery_mode,
+        )
+        if action == FORWARD:
+            action_succeeded = self.robot.forward(1)
+        elif action == BACKWARD:
+            action_succeeded = self.robot.backward(1)
+        elif action == TURN_LEFT:
+            self.robot.turnLeft(90)
+            action_succeeded = True
+        elif action == TURN_RIGHT:
+            self.robot.turnRight(90)
+            action_succeeded = True
+        else:
+            return False, f"Unknown Student RL action: {action}.", path
+
+        visit_key = action_visit_key(state, action)
+        self.student_rl_action_counts[visit_key] = (
+            self.student_rl_action_counts.get(visit_key, 0) + 1
+        )
+        current_coord = (self.robot.x, self.robot.y)
+        self.student_rl_position_counts[current_coord] = (
+            self.student_rl_position_counts.get(current_coord, 0) + 1
+        )
+        if action in (FORWARD, BACKWARD):
+            self.student_rl_recovery_mode = not action_succeeded
+        self.student_rl_last_action = action
         score_message = self.apply_action_score(before_coord, before_direction)
 
+        source_labels = {
+            "policy": "Saved Student RL policy",
+            "planner": "Hybrid Student RL planner fallback",
+            "recovery": "Hybrid Student RL recovery/exploration",
+        }
+        source_label = source_labels.get(action_source, "Student RL")
+        action_label = ACTION_LABELS.get(action, action)
         if self.final_goal_reached:
-            return True, f"Saved Student RL policy moved to {next_coord}.{score_message}", path
-        if moved:
-            if self._student_rl_run_state_signature() != self.student_rl_run_signature:
-                self.student_rl_run_qtable = None
-            return None, f"Saved Student RL policy moved to {next_coord}.{score_message}", path
+            result_verb = "moved" if before_coord != current_coord else "acted"
+            return (
+                True,
+                f"{source_label} {result_verb}: {action_label}; "
+                f"reached {current_coord}.{score_message}",
+                path,
+            )
+        if action_succeeded:
+            result_verb = "moved" if before_coord != current_coord else "turned"
+            return (
+                None,
+                f"{source_label} {result_verb}: {action_label} "
+                f"at {current_coord}.{score_message}",
+                path,
+            )
 
-        self.student_rl_run_qtable = None
         self.student_rl_run_signature = None
-        self.student_rl_run_policy_data = None
-        return None, f"Saved Student RL policy discovered obstacle near {next_coord}; replanning.{score_message}", path
+        return (
+            None,
+            f"{source_label}: {action_label} was blocked near {before_coord}; "
+            f"updating local state and replanning the next behavior."
+            f"{score_message}",
+            path,
+        )
 
     def get_robot_x(self):
         return self.robot.x

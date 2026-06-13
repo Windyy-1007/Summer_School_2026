@@ -1,14 +1,7 @@
 import random
-import os
-import sys
 
 from Algo.Astar import astar
 from Algo.QLearning import ACTIONS, get_path as qlearning_path, train as train_qtable
-
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-SRC_DIR = os.path.join(ROOT_DIR, "src")
-if SRC_DIR not in sys.path:
-    sys.path.append(SRC_DIR)
 
 from src.agent import Robot
 from src.map import LineMap

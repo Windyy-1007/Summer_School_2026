@@ -1,2 +1,4 @@
 *.pyc
 __pycache__/
+
+maps/student_rl_policies/*.json

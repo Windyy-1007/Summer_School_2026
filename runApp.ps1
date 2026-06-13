@@ -1,1 +1,1 @@
-python ./app/keyboardControl.py
+python ./main.py

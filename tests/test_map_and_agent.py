@@ -1,13 +1,6 @@
 import unittest
-import sys
-import os
-
-# Add src folder to python path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-
-from map import Map, LineMap, Node, Edge
-from agent import Robot
+from src.map import Map, LineMap, Node, Edge
+from src.agent import Robot
 
 class TestMap(unittest.TestCase):
     def test_map_abstract_class(self):

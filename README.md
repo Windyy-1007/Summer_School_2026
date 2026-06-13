@@ -1,64 +1,102 @@
-# Summer_School_2026
+# Summer School 2026 Robot RL
 
-Quick commands to run this repo.
+The project now has one student-facing entrypoint:
 
-## Latest updates
+```powershell
+python .\main.py
+```
 
-## Requirements
-
-- Python 3
-- Tkinter, usually included with Python
-
-## Run the app
-
-From the repo root:
+The PowerShell launcher runs the same file:
 
 ```powershell
 .\runApp.ps1
 ```
 
-Or run the Python entrypoint directly:
+## Student workflow
 
-```powershell
-python .\app\keyboardControl.py
-```
+1. Edit the learning algorithm in `Algo/StudentRL.py`.
+2. Edit reusable MDP state, transition, reward, and map helpers in `rl_library.py`.
+3. Run `python .\main.py`.
+4. Load a training map, choose episodes, and train the current map or all maps.
+5. Run the saved Student RL policy and inspect its path, score, and logs.
 
-In the app:
+`Train All Maps` runs map 1, then map 2, through map N. Training is split into
+small UI batches so the current map, greedy path, log, map number, and episode
+progress remain visible while training.
 
-- `Show A* Path` draws an A* route from the robot to the goal.
-- `Show Q-learning Path` draws a Q-learning route from the start to the goal.
-- `Run Two-map A*` animates the robot using `known_map` and replans as obstacles are discovered.
-- `Run Two-map Q` animates Q-learning using `known_map` and replans as obstacles are discovered.
-- `Run Student RL` animates the `Algo.StudentRL` policy using `known_map` and replans as obstacles are discovered.
-- `Train Student RL` continues training the one shared `Algo.StudentRL` policy on the current map and saves it to `maps/student_rl_policies/student_rl_policy.json`.
-- `Train One RL Model` continues training the same shared policy across every JSON map in `maps/training` and saves it back to `maps/student_rl_policies/student_rl_policy.json`.
-- `Reset RL Model` deletes `maps/student_rl_policies/student_rl_policy.json` and clears in-memory Student RL state so the next training starts fresh.
-- `Set Goal` lets you click a map node to move the goal.
-- `Toggle Sub-goal` lets you click a map node to add or remove a sub-goal.
-- `Toggle Node Obstacle` lets you click a node to block or unblock it.
-- `Toggle Edge Obstacle` lets you click two adjacent nodes to block or unblock the edge between them.
-- `Reset Robot` moves the robot back to the start.
+When the saved Q-table has no confident action for an unfamiliar state, runtime
+navigation switches to a planner fallback on the robot's `known_map`. It still
+has to discover real obstacles through movement; each discovery updates
+`known_map`, then the hybrid Student RL policy replans toward the next
+checkpoint or final goal.
 
-Score rules:
+Runtime execution is action-first. The UI executes the policy's next forward,
+backward, left-turn, or right-turn action even when the predicted route is only
+partial. Repeated state-actions and known collisions trigger local
+recovery/exploration, which favors unblocked and less-visited behavior instead
+of stopping with a "no complete path" result.
+
+The Q-table learns two state views together. Exact states retain map position,
+heading, checkpoint progress, and local geometry for route-specific behavior.
+Reusable micro-pattern states describe blocked directions relative to the
+robot, relative target direction, previous action, and collision recovery.
+This lets behavior learned around one obstacle transfer to a similar situation
+at another position or on another map. The supporting state, lookup, reward,
+and planner functions remain in `rl_library.py`; `Algo/StudentRL.py` only calls
+those helpers from the learning loop.
+
+All 30 curriculum maps use the same 18x12 canvas. They retain the progression
+from empty navigation, to sparse obstacles, to checkpoints, and then denser
+multi-checkpoint challenges. A generated 18x12 custom challenge is available at
+`maps/custom/map_18x12_challenge.json`.
+
+## Main folders
+
+- `Algo/`: A*, baseline Q-learning, and the student RL implementation.
+- `app/`: Tkinter UI and the simulation service used by `main.py`.
+- `src/`: Core map and robot domain models.
+- `maps/`: Custom maps, curriculum maps, and saved Student RL policies.
+- `tests/`: Automated tests and the test case sheet.
+- `tools/`: Map generation, CLI training, visualization, and algorithm demos.
+- `XBot/`: Hardware integration code, kept separate from the simulator.
+
+## UI controls
+
+- `Show A* Reference`: display a reference route for comparison.
+- `Run Student RL`: animate the saved Student RL policy.
+- `Reset Robot`: return the robot to the map start.
+- `Train Current Map`: continue the shared policy on the visible map.
+- `Train All Maps`: train sequentially across every curriculum map.
+- `Stop RL`: stop after the current UI batch.
+- `Reset RL Model`: delete the saved shared policy.
+- Map editor controls: set goals, checkpoints, node obstacles, and edge obstacles.
+
+Keyboard controls are `W` forward, `S` backward, `A` turn left, and `D` turn
+right.
+
+## Scoring
 
 - Final goal: `+400`
-- Each sub-goal: `+150`
-- Each move: `-3`
+- Each checkpoint: `+200`
+- Each move: `-4`
 - Each turn: `-1`
+- Unfinished route: `-1000 - minimum Manhattan distance`
 
-## Run A* and Q-learning simulation
+## Tests
 
 ```powershell
-python .\simulation.py
+python -m unittest discover -s tests -v
 ```
 
-This prints:
+The test matrix is documented in `tests/TEST_CASES.md`.
 
-- A* path on the full map
-- Q-learning path on the full map
-- Q-table greedy policy for the learned path
-- Two-map robot navigation using A* on `known_map`
+## Developer tools
 
-## API examples
+Run these from the repository root:
 
-See `API.py` for sample robot, ultrasonic, line sensor, button, timer, and motion API calls.
+```powershell
+python -m tools.train_student_rl --episodes 500
+python -m tools.run_algorithm_demo
+python -m tools.visualize_map
+python -m tools.generate_training_maps
+```
